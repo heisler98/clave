@@ -24,6 +24,9 @@ export interface SecretRequestView {
   }
 }
 
+/** macOS microphone permission state, as reported by TCC. */
+export type MicrophoneStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+
 export interface ClaveFileGroupData {
   name: string
   cwd: string
@@ -340,6 +343,9 @@ export interface ElectronAPI {
   setAppIcon: (icon: string) => Promise<void>
   getUsername: () => Promise<string | null>
   getAppVersion: () => Promise<string>
+  getMicrophoneStatus: () => Promise<MicrophoneStatus>
+  requestMicrophoneAccess: () => Promise<boolean>
+  openMicrophoneSettings: () => Promise<void>
   installUpdate: () => Promise<void>
   startDownload: () => Promise<void>
   cancelDownload: () => Promise<void>

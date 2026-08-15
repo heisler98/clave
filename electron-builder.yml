@@ -36,10 +36,12 @@ mac:
       arch:
         - universal
   x64ArchFiles: "Contents/Resources/app.asar.unpacked/node_modules/**/{*.node,spawn-helper}"
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSMicrophoneUsageDescription: Clave needs microphone access so voice input works in your agent sessions.
   notarize: true
 dmg:
   artifactName: ${name}-${version}.${ext}

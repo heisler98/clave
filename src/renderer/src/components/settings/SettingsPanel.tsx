@@ -6,7 +6,15 @@ import { useWorkspaceStore } from '../../store/workspace-store'
 import { useClaudeProfileStore, DEFAULT_CLAUDE_PROFILE_ID } from '../../store/claude-profile-store'
 import { UserIconDisplay, ICON_MAP } from '../ui/UserIconDisplay'
 import { CheckIcon } from '@heroicons/react/24/solid'
-import { TrashIcon, PlusIcon, PencilIcon, FolderIcon, ShieldCheckIcon } from '@heroicons/react/24/outline'
+import {
+  TrashIcon,
+  PlusIcon,
+  PencilIcon,
+  FolderIcon,
+  ShieldCheckIcon,
+  MicrophoneIcon
+} from '@heroicons/react/24/outline'
+import type { MicrophoneStatus } from '../../../../preload/index.d'
 import { LocationsTab } from './LocationsTab'
 import { UsagePanel } from '../usage/UsagePanel'
 import { SettingsSection, SettingsCard, SettingsRow, ToggleRow } from './primitives'
@@ -363,8 +371,85 @@ function SessionsSection() {
           onChange={setTmuxMode}
           disabled={unavailable}
         />
+        <MicrophoneRow />
       </SettingsCard>
     </SettingsSection>
+  )
+}
+
+const MIC_DESCRIPTIONS: Record<Exclude<MicrophoneStatus, 'unknown'>, string> = {
+  'not-determined':
+    'Voice input inside an agent session asks macOS through Clave. Grant microphone access once and it works in every session.',
+  granted: 'Clave holds microphone access, so voice input works inside your agent sessions.',
+  denied:
+    'macOS is blocking the microphone for Clave. Turn it on under Privacy & Security > Microphone in System Settings, then relaunch Clave.',
+  restricted:
+    'A system policy on this Mac restricts microphone access, so voice input stays unavailable.'
+}
+
+/** Microphone permission state for agent voice input (macOS attributes the
+ *  request to Clave, so the grant has to live on the app itself). */
+function MicrophoneRow(): ReactNode {
+  const [status, setStatus] = useState<MicrophoneStatus | null>(null)
+  const [requesting, setRequesting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = (): void => {
+      window.electronAPI?.getMicrophoneStatus().then((next) => {
+        if (!cancelled) setStatus(next)
+      })
+    }
+    refresh()
+    // Re-read after a trip to System Settings.
+    window.addEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
+
+  // Loading, or a platform without a TCC microphone prompt.
+  if (status === null || status === 'unknown') return null
+
+  const handleRequest = async (): Promise<void> => {
+    setRequesting(true)
+    try {
+      await window.electronAPI?.requestMicrophoneAccess()
+      const next = await window.electronAPI?.getMicrophoneStatus()
+      if (next) setStatus(next)
+    } finally {
+      setRequesting(false)
+    }
+  }
+
+  return (
+    <SettingsRow label="Microphone access" description={MIC_DESCRIPTIONS[status]}>
+      {status === 'granted' && (
+        <span className="flex items-center gap-1 text-xs text-text-tertiary">
+          <CheckIcon className="w-3.5 h-3.5" />
+          Granted
+        </span>
+      )}
+      {status === 'not-determined' && (
+        <button
+          onClick={handleRequest}
+          disabled={requesting}
+          className="btn-secondary btn-compact border border-border-subtle"
+        >
+          <MicrophoneIcon className="w-3.5 h-3.5" />
+          {requesting ? 'Waiting…' : 'Grant access'}
+        </button>
+      )}
+      {status === 'denied' && (
+        <button
+          onClick={() => window.electronAPI?.openMicrophoneSettings()}
+          className="btn-secondary btn-compact border border-border-subtle whitespace-nowrap"
+        >
+          Open System Settings
+        </button>
+      )}
+    </SettingsRow>
   )
 }
 

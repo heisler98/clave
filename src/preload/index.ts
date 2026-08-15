@@ -149,6 +149,15 @@ const electronAPI = {
     ipcRenderer.invoke('app:save-avatar', sourcePath) as Promise<string | null>,
   getAppVersion: () => ipcRenderer.invoke('app:get-version') as Promise<string>,
 
+  // Microphone (voice input in agent sessions)
+  getMicrophoneStatus: () =>
+    ipcRenderer.invoke('media:get-microphone-status') as Promise<
+      'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+    >,
+  requestMicrophoneAccess: () => ipcRenderer.invoke('media:request-microphone') as Promise<boolean>,
+  openMicrophoneSettings: () =>
+    ipcRenderer.invoke('media:open-microphone-settings') as Promise<void>,
+
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   startDownload: () => ipcRenderer.invoke('updater:start-download'),
   cancelDownload: () => ipcRenderer.invoke('updater:cancel-download'),

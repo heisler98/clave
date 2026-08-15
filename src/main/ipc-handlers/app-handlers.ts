@@ -1,4 +1,4 @@
-import { ipcMain, app, nativeImage } from 'electron'
+import { ipcMain, app, nativeImage, shell, systemPreferences } from 'electron'
 import { getMainWindow } from '../window-utils'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
@@ -200,5 +200,42 @@ export function registerAppHandlers(): void {
 
   ipcMain.handle('app:get-version', () => {
     return app.getVersion()
+  })
+
+  // ── Microphone (voice input inside agent sessions) ──
+  // macOS attributes a capture request to the *responsible process* of whatever
+  // asks — for `Clave.app → zsh -l -c claude` that is Clave.app. So the CLI's
+  // voice mode only works if Clave itself holds the microphone grant.
+
+  ipcMain.handle('media:get-microphone-status', () => {
+    if (process.platform !== 'darwin') return 'unknown'
+    try {
+      return systemPreferences.getMediaAccessStatus('microphone')
+    } catch {
+      return 'unknown'
+    }
+  })
+
+  ipcMain.handle('media:request-microphone', async () => {
+    if (process.platform !== 'darwin') return false
+    try {
+      return await systemPreferences.askForMediaAccess('microphone')
+    } catch {
+      return false
+    }
+  })
+
+  // Deliberately a dedicated handler with a hardcoded URL: the generic
+  // `shell:openExternal` sink only allows http/https/mailto, since terminal
+  // output reaches it and arbitrary URI schemes are an attack surface there.
+  ipcMain.handle('media:open-microphone-settings', async () => {
+    if (process.platform !== 'darwin') return
+    try {
+      await shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+      )
+    } catch {
+      // Settings pane unavailable — nothing further we can do from here.
+    }
   })
 }
