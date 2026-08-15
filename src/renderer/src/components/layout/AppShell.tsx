@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, isFileTabId, getDisplayOrder, enableSidebarPersistence } from '../../store/session-store'
 import type { SessionGroup } from '../../store/session-store'
 import { useAgentStore } from '../../store/agent-store'
-import { getSelectedClaudeProfile, claudeProfileSpawnFields } from '../../store/claude-profile-store'
+import { launchNewSession } from '../../lib/create-session'
 import { Sidebar } from './Sidebar'
 import { TerminalGrid } from './TerminalGrid'
 import { SettingsPanel } from '../settings/SettingsPanel'
@@ -65,52 +65,24 @@ export function AppShell() {
 
   useWorkTracker()
 
+  // Every new-session shortcut goes through the shared helper: it resolves the
+  // directory (last used, or the picker) and spawns there. `forcePicker` is the
+  // Option modifier, which always asks for a folder.
   const spawnSessionWithOptions = useCallback(
-    async (claudeMode: boolean, dangerousMode: boolean, antigravityMode?: boolean, codexMode?: boolean, claudeAgentsMode?: boolean) => {
-      try {
-        const folderPath = await window.electronAPI.openFolderDialog()
-        if (!folderPath) return
-
-        const otherProvider = antigravityMode || codexMode || claudeAgentsMode
-        const effectiveClaudeMode = otherProvider ? false : claudeMode
-        // Keybinding/toolbar launches use the selected default Claude account.
-        // Profiles apply only to Claude Code + Claude Agents — never plain
-        // terminals (Cmd+T), Antigravity, or Codex.
-        const isClaudeSession = effectiveClaudeMode || claudeAgentsMode
-        const profile = isClaudeSession ? getSelectedClaudeProfile() : null
-        const profileFields = profile ? claudeProfileSpawnFields(profile) : {}
-        const sessionInfo = await window.electronAPI.spawnSession(folderPath, {
-          claudeMode: otherProvider ? false : claudeMode,
-          antigravityMode,
-          codexMode,
-          claudeAgentsMode,
-          dangerousMode,
-          ...profileFields
-        })
-        addSession({
-          id: sessionInfo.id,
-          cwd: sessionInfo.cwd,
-          folderName: sessionInfo.folderName,
-          name: sessionInfo.folderName,
-          alive: sessionInfo.alive,
-          activityStatus: 'idle',
-          promptWaiting: null,
-          claudeMode: otherProvider ? false : claudeMode,
-          antigravityMode: antigravityMode ?? false,
-          codexMode: codexMode ?? false,
-          claudeAgentsMode: claudeAgentsMode ?? false,
-          dangerousMode,
-          claudeSessionId: sessionInfo.claudeSessionId,
-          claudeProfileId: profile?.id,
-          claudeProfileLabel: profile?.label,
-          claudeConfigDir: profile?.configDir || undefined,
-          sessionType: 'local'
-        })
-      } catch (err) {
-        console.error('Failed to create session:', err)
-      }
+    async (
+      claudeMode: boolean,
+      dangerousMode: boolean,
+      antigravityMode?: boolean,
+      codexMode?: boolean,
+      claudeAgentsMode?: boolean,
+      forcePicker?: boolean
+    ) => {
+      await launchNewSession(
+        { claudeMode, dangerousMode, antigravityMode, codexMode, claudeAgentsMode },
+        { forcePicker }
+      )
     },
-    [addSession]
+    []
   )
 
   // Wire the in-app MCP command dispatcher and the secret-request store to
@@ -333,38 +305,45 @@ export function AppShell() {
         }
         return
       }
+      // New-session shortcuts. Holding Option always opens the folder picker;
+      // without it the session starts in the last used folder (see the Sessions
+      // setting). macOS rewrites `e.key` while Option is down (Option+N arrives
+      // as a dead-key "˜"), so the physical `e.code` is accepted as well.
+      const isSessionKey = (key: string, code: string): boolean =>
+        e.key.toLowerCase() === key || e.code === code
+      const pickFolder = e.altKey
       // Cmd+T: New terminal session
-      if (e.metaKey && e.key === 't') {
+      if (e.metaKey && !e.shiftKey && isSessionKey('t', 'KeyT')) {
         e.preventDefault()
-        spawnSessionWithOptions(false, false)
+        spawnSessionWithOptions(false, false, false, false, false, pickFolder)
       }
       // Cmd+N: New Claude Code session
-      if (e.metaKey && e.key === 'n') {
+      if (e.metaKey && !e.shiftKey && isSessionKey('n', 'KeyN')) {
         e.preventDefault()
-        spawnSessionWithOptions(true, false)
+        spawnSessionWithOptions(true, false, false, false, false, pickFolder)
       }
       // Cmd+D: New Claude Code session with --dangerously-skip-permissions
-      if (e.metaKey && e.key === 'd') {
+      if (e.metaKey && !e.shiftKey && isSessionKey('d', 'KeyD')) {
         e.preventDefault()
-        spawnSessionWithOptions(true, true)
+        spawnSessionWithOptions(true, true, false, false, false, pickFolder)
       }
       // Cmd+I: New Antigravity CLI session
-      if (e.metaKey && !e.shiftKey && !e.altKey && e.key === 'i') {
+      if (e.metaKey && !e.shiftKey && isSessionKey('i', 'KeyI')) {
         e.preventDefault()
-        spawnSessionWithOptions(false, false, true)
+        spawnSessionWithOptions(false, false, true, false, false, pickFolder)
       }
       // Cmd+U: New Codex CLI session
-      if (e.metaKey && !e.shiftKey && !e.altKey && e.key === 'u') {
+      if (e.metaKey && !e.shiftKey && isSessionKey('u', 'KeyU')) {
         e.preventDefault()
-        spawnSessionWithOptions(false, false, false, true)
+        spawnSessionWithOptions(false, false, false, true, false, pickFolder)
       }
       // Cmd+Shift+A: New Claude Agents session (`claude agents`)
-      if (e.metaKey && e.shiftKey && !e.altKey && (e.key === 'a' || e.key === 'A')) {
+      if (e.metaKey && e.shiftKey && isSessionKey('a', 'KeyA')) {
         e.preventDefault()
-        spawnSessionWithOptions(false, false, false, false, true)
+        spawnSessionWithOptions(false, false, false, false, true, pickFolder)
       }
       // Cmd+W: Close focused file tab
-      if (e.metaKey && e.key === 'w') {
+      if (e.metaKey && !e.shiftKey && e.key === 'w') {
         const sid = useSessionStore.getState().focusedSessionId
         if (sid && isFileTabId(sid)) {
           e.preventDefault()

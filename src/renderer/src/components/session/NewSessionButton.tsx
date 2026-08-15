@@ -1,52 +1,24 @@
 import { useCallback, useState } from 'react'
-import { useSessionStore } from '../../store/session-store'
+import { defaultNewSessionOptions, launchNewSession } from '../../lib/create-session'
 
 export function NewSessionButton() {
-  const addSession = useSessionStore((s) => s.addSession)
   const [loading, setLoading] = useState(false)
 
-  const handleNewSession = useCallback(async () => {
+  // Starts in the last used folder; holding Option opens the folder picker.
+  const handleNewSession = useCallback(async (forcePicker: boolean) => {
     setLoading(true)
     try {
-      const folderPath = await window.electronAPI.openFolderDialog()
-      if (!folderPath) return
-
-      const state = useSessionStore.getState()
-      const otherProvider = state.antigravityMode || state.codexMode || state.claudeAgentsMode
-      const sessionInfo = await window.electronAPI.spawnSession(folderPath, {
-        claudeMode: otherProvider ? false : state.claudeMode,
-        antigravityMode: state.antigravityMode,
-        codexMode: state.codexMode,
-        claudeAgentsMode: state.claudeAgentsMode,
-        dangerousMode: state.dangerousMode
-      })
-      addSession({
-        id: sessionInfo.id,
-        cwd: sessionInfo.cwd,
-        folderName: sessionInfo.folderName,
-        name: sessionInfo.folderName,
-        alive: sessionInfo.alive,
-        activityStatus: 'idle',
-        promptWaiting: null,
-        claudeMode: otherProvider ? false : state.claudeMode,
-        antigravityMode: state.antigravityMode,
-        codexMode: state.codexMode,
-        claudeAgentsMode: state.claudeAgentsMode,
-        dangerousMode: state.dangerousMode,
-        claudeSessionId: sessionInfo.claudeSessionId,
-        sessionType: 'local'
-      })
-    } catch (err) {
-      console.error('Failed to create session:', err)
+      await launchNewSession(defaultNewSessionOptions(), { forcePicker })
     } finally {
       setLoading(false)
     }
-  }, [addSession])
+  }, [])
 
   return (
     <button
-      onClick={handleNewSession}
+      onClick={(e) => void handleNewSession(e.altKey)}
       disabled={loading}
+      title="New session (hold Option to choose a folder)"
       className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-surface-200 hover:bg-surface-300 text-text-secondary hover:text-text-primary transition-colors text-sm font-medium disabled:opacity-50"
     >
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none">

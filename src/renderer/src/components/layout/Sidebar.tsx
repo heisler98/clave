@@ -19,10 +19,12 @@ import { WhatsNewBanner } from '../help/WhatsNewBanner'
 import { TelemetryNoticeBanner } from '../help/TelemetryNoticeBanner'
 import { FeedbackBanner } from '../help/FeedbackBanner'
 import { NewSessionDropdown } from './NewSessionDropdown'
+import { buildNewSessionMenuItems, type NewSessionLaunchOptions } from './new-session-menu'
 import { RemoteDirectoryPicker } from '../ui/RemoteDirectoryPicker'
 import { useAgentStore } from '../../store/agent-store'
 import { useLocationStore } from '../../store/location-store'
-import { useClaudeProfileStore, getClaudeProfile, claudeProfileSpawnFields } from '../../store/claude-profile-store'
+import { launchNewSession, type NewSessionOptions } from '../../lib/create-session'
+import { useSessionDirStore, refreshRecentSessionDirs } from '../../store/session-dir-store'
 import { usePinnedStore, pinGroupFromCurrent, removePinnedGroupWithCleanup, resyncPinnedGroup, findPinnedByGroupId, isPinnedOutOfSync, getHiddenGroupIds, exportClaveFile, getExportFileName, initClaveFileWatchers } from '../../store/pinned-store'
 import { PinnedGroupsGrid } from '../session/PinnedGroupsGrid'
 import { TemplatePickerPopover } from '../session/TemplatePickerPopover'
@@ -229,56 +231,56 @@ export function Sidebar() {
     return isGroup ? draggedIds[0] : null
   }, [isDragging, draggedIds, groups])
 
-  const handleNewSession = useCallback(async (claudeProfileId?: string) => {
-    setLoading(true)
-    try {
-      const folderPath = await window.electronAPI.openFolderDialog()
-      if (!folderPath) return
+  // Local new session from the dropdown or the trigger's right-click menu. The
+  // provider, the account, and the directory all arrive as arguments; the
+  // shared helper resolves the folder and spawns.
+  const handleNewSession = useCallback(
+    async (options: NewSessionOptions, ctx?: { cwd?: string; forcePicker?: boolean }) => {
+      setLoading(true)
+      try {
+        await launchNewSession(options, ctx)
+      } finally {
+        setLoading(false)
+      }
+    },
+    []
+  )
 
-      const state = useSessionStore.getState()
-      const otherProvider = state.antigravityMode || state.codexMode || state.claudeAgentsMode
-      const effectiveClaudeMode = otherProvider ? false : state.claudeMode
-      // Claude account/profile: applies only to Claude Code + Claude Agents
-      // sessions — never plain terminals, Antigravity, or Codex. Default profile
-      // contributes no configDir (passthrough).
-      const isClaudeSession = effectiveClaudeMode || state.claudeAgentsMode
-      const profile = isClaudeSession
-        ? getClaudeProfile(claudeProfileId ?? useClaudeProfileStore.getState().selectedProfileId)
-        : null
-      const profileFields = profile ? claudeProfileSpawnFields(profile) : {}
-      const sessionInfo = await window.electronAPI.spawnSession(folderPath, {
-        dangerousMode: state.dangerousMode,
-        claudeMode: otherProvider ? false : state.claudeMode,
-        antigravityMode: state.antigravityMode,
-        codexMode: state.codexMode,
-        claudeAgentsMode: state.claudeAgentsMode,
-        ...profileFields
+  const recentSessionDirs = useSessionDirStore((s) => s.recentDirs)
+
+  const handleNewSessionLaunch = useCallback(
+    (opts: NewSessionLaunchOptions) => {
+      const { locationId, cwd, forcePicker, ...options } = opts
+      if (locationId) {
+        // Remote: open the directory picker (profiles are a local concept).
+        const loc = useLocationStore.getState().locations.find((l) => l.id === locationId)
+        setRemotePickerState({
+          locationId,
+          locationName: loc?.name ?? '',
+          claudeMode: options.claudeMode,
+          antigravityMode: options.antigravityMode,
+          codexMode: options.codexMode
+        })
+        return
+      }
+      void handleNewSession(options, { cwd, forcePicker })
+    },
+    [handleNewSession]
+  )
+
+  // Right-click the "New session" row for the same menu the dropdown shows.
+  const handleNewSessionContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      refreshRecentSessionDirs()
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: buildNewSessionMenuItems(recentSessionDirs, handleNewSessionLaunch)
       })
-      addSession({
-        id: sessionInfo.id,
-        cwd: sessionInfo.cwd,
-        folderName: sessionInfo.folderName,
-        name: sessionInfo.folderName,
-        alive: sessionInfo.alive,
-        activityStatus: 'idle',
-        promptWaiting: null,
-        claudeMode: otherProvider ? false : state.claudeMode,
-        antigravityMode: state.antigravityMode,
-        codexMode: state.codexMode,
-        claudeAgentsMode: state.claudeAgentsMode,
-        dangerousMode: state.dangerousMode,
-        claudeSessionId: sessionInfo.claudeSessionId,
-        claudeProfileId: profile?.id,
-        claudeProfileLabel: profile?.label,
-        claudeConfigDir: profile?.configDir || undefined,
-        sessionType: 'local'
-      })
-    } catch (err) {
-      console.error('Failed to create session:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [addSession])
+    },
+    [recentSessionDirs, handleNewSessionLaunch]
+  )
 
   // Cmd+G to group, Cmd+Alt+G to ungroup, Cmd+Shift+Delete to reset
   useEffect(() => {
@@ -1089,51 +1091,8 @@ export function Sidebar() {
         {/* Permanent tabs — share the same row gap as the session tabs below */}
         <div className="px-2 space-y-0.5">
           <NewSessionDropdown
-            onNewSession={({ claudeMode, antigravityMode, codexMode, claudeAgentsMode, dangerousMode, locationId, claudeProfileId }) => {
-              if (locationId) {
-                // Remote: open directory picker (profiles are a local concept)
-                const loc = useLocationStore.getState().locations.find((l) => l.id === locationId)
-                setRemotePickerState({ locationId, locationName: loc?.name ?? '', claudeMode, antigravityMode, codexMode })
-              } else if (claudeAgentsMode) {
-                // Claude Agents: spawn `claude agents` via temporary mode override
-                const store = useSessionStore.getState()
-                const prevAgents = store.claudeAgentsMode
-                const prevClaude = store.claudeMode
-                useSessionStore.setState({ claudeAgentsMode: true, claudeMode: false })
-                handleNewSession(claudeProfileId).finally(() => {
-                  useSessionStore.setState({ claudeAgentsMode: prevAgents, claudeMode: prevClaude })
-                })
-              } else if (antigravityMode) {
-                // Antigravity: spawn directly without mode override
-                const store = useSessionStore.getState()
-                const prevAntigravity = store.antigravityMode
-                const prevClaude = store.claudeMode
-                useSessionStore.setState({ antigravityMode: true, claudeMode: false })
-                handleNewSession().finally(() => {
-                  useSessionStore.setState({ antigravityMode: prevAntigravity, claudeMode: prevClaude })
-                })
-              } else if (codexMode) {
-                // Codex: spawn directly without mode override
-                const store = useSessionStore.getState()
-                const prevCodex = store.codexMode
-                const prevClaude = store.claudeMode
-                useSessionStore.setState({ codexMode: true, claudeMode: false })
-                handleNewSession().finally(() => {
-                  useSessionStore.setState({ codexMode: prevCodex, claudeMode: prevClaude })
-                })
-              } else {
-                // Local: existing flow (temporary mode override -> handleNewSession)
-                const store = useSessionStore.getState()
-                const prevClaude = store.claudeMode
-                const prevDangerous = store.dangerousMode
-                if (claudeMode !== prevClaude) useSessionStore.setState({ claudeMode })
-                if (dangerousMode !== prevDangerous) useSessionStore.setState({ dangerousMode })
-                handleNewSession(claudeProfileId).finally(() => {
-                  if (claudeMode !== prevClaude) useSessionStore.setState({ claudeMode: prevClaude })
-                  if (dangerousMode !== prevDangerous) useSessionStore.setState({ dangerousMode: prevDangerous })
-                })
-              }
-            }}
+            onNewSession={handleNewSessionLaunch}
+            onTriggerContextMenu={handleNewSessionContextMenu}
             loading={loading}
           />
           <button

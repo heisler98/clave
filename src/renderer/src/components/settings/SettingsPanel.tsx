@@ -11,6 +11,7 @@ import {
   PlusIcon,
   PencilIcon,
   FolderIcon,
+  FolderOpenIcon,
   ShieldCheckIcon,
   MicrophoneIcon
 } from '@heroicons/react/24/outline'
@@ -18,7 +19,8 @@ import type { MicrophoneStatus } from '../../../../preload/index.d'
 import { LocationsTab } from './LocationsTab'
 import { UsagePanel } from '../usage/UsagePanel'
 import { SettingsSection, SettingsCard, SettingsRow, ToggleRow } from './primitives'
-import { cn } from '../../lib/utils'
+import { useSessionDirStore, refreshRecentSessionDirs } from '../../store/session-dir-store'
+import { cn, shortenPath } from '../../lib/utils'
 
 const themes: { id: Theme; label: string; colors: { bg: string; surface: string; text: string; border: string } }[] = [
   {
@@ -371,9 +373,60 @@ function SessionsSection() {
           onChange={setTmuxMode}
           disabled={unavailable}
         />
+        <NewSessionFolderRow />
         <MicrophoneRow />
       </SettingsCard>
     </SettingsSection>
+  )
+}
+
+/** Where Cmd+N and the sidebar's New session land: the folder used last, or a
+ *  fresh pick every time. Either way, Option opens the picker on demand. */
+function NewSessionFolderRow(): ReactNode {
+  const mode = useSessionDirStore((s) => s.mode)
+  const setMode = useSessionDirStore((s) => s.setMode)
+  const recentDirs = useSessionDirStore((s) => s.recentDirs)
+
+  useEffect(() => {
+    refreshRecentSessionDirs()
+  }, [])
+
+  const lastUsed = recentDirs[0]
+
+  return (
+    <SettingsRow
+      label="New session folder"
+      description={
+        mode === 'lastUsed'
+          ? lastUsed
+            ? `New sessions start in ${shortenPath(lastUsed)}. Hold Option, or use the New session menu, to choose another folder.`
+            : 'New sessions start in the folder you used last. The first one asks where to start.'
+          : 'Every new session asks for a folder. The picker opens on the folder you used last.'
+      }
+    >
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setMode('lastUsed')}
+          className={cn(
+            'btn-secondary btn-compact border',
+            mode === 'lastUsed' ? 'border-accent text-text-primary' : 'border-border-subtle'
+          )}
+        >
+          <FolderIcon className="w-3.5 h-3.5" />
+          Last used
+        </button>
+        <button
+          onClick={() => setMode('alwaysAsk')}
+          className={cn(
+            'btn-secondary btn-compact border',
+            mode === 'alwaysAsk' ? 'border-accent text-text-primary' : 'border-border-subtle'
+          )}
+        >
+          <FolderOpenIcon className="w-3.5 h-3.5" />
+          Always ask
+        </button>
+      </div>
+    </SettingsRow>
   )
 }
 
