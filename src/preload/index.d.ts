@@ -362,7 +362,7 @@ export interface ElectronAPI {
     title: string
     body: string
     sessionId: string
-  }) => Promise<'shown' | 'skipped-focused' | 'unsupported'>
+  }) => Promise<'shown' | 'skipped-focused' | 'skipped-disabled' | 'unsupported'>
   onNotificationClicked: (callback: (sessionId: string) => void) => () => void
   listFiles: (cwd: string) => Promise<{ files: string[]; truncated: boolean }>
   readDir: (rootCwd: string, dirPath: string) => Promise<DirEntry[]>

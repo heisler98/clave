@@ -8,6 +8,11 @@ import {
 import { getPreference } from './clave-file-handlers'
 import * as titleGenerator from '../title-generator'
 import { startWatching as startAgentStateWatching, clearState as clearAgentState } from '../agent-state-manager'
+import {
+  startWatching as startAgentEventWatching,
+  clearEvents as clearAgentEvents
+} from '../agent-event-manager'
+import { showSessionNotification } from '../notification-manager'
 
 export function registerPtyHandlers(): void {
   // Buffer PTY input per session to detect /clear command
@@ -20,12 +25,25 @@ export function registerPtyHandlers(): void {
     }
   })
 
+  // Claude Code notification events (same hook mechanism) → native notification.
+  // The title is the tab's own name so several running sessions stay tellable
+  // apart; a session main no longer tracks is skipped, which also drops events
+  // from a file left behind by an earlier run.
+  startAgentEventWatching((claveSessionId, body) => {
+    const title = ptyManager.getSessionLabel(claveSessionId)
+    if (!title) return
+    showSessionNotification({ title, body, sessionId: claveSessionId })
+  })
+
   ipcMain.handle('pty:spawn', (_event, cwd: string, options?: PtySpawnOptions) => {
     // tmux mode is a global app setting, ON by default. Honour it unless a
     // caller overrides per-spawn or the user explicitly turned it off. (When
     // tmux isn't installed the spawn transparently falls back to a plain shell.)
     const tmuxMode = options?.tmuxMode ?? getPreference('tmuxMode') !== false
     const session = ptyManager.spawn(cwd, { ...options, tmuxMode })
+    // Adoption reuses the previous run's session id, so an event file from that
+    // run can still be on disk. Start every session from an empty log.
+    clearAgentEvents(session.id)
     const win = BrowserWindow.fromWebContents(_event.sender)
     const isClaudeMode = options?.claudeMode !== false && !options?.antigravityMode && !options?.codexMode && !options?.claudeAgentsMode
     const isResumed = !!options?.resumeSessionId
@@ -48,6 +66,7 @@ export function registerPtyHandlers(): void {
         titleGenerator.cleanup(session.id)
         inputBuffers.delete(session.id)
         clearAgentState(session.id)
+        clearAgentEvents(session.id)
         if (win && !win.isDestroyed()) {
           win.webContents.send(`pty:exit:${session.id}`, exitCode)
         }

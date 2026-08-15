@@ -2,11 +2,32 @@ import { useEffect, useRef, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { useSessionStore } from '../store/session-store'
+import type { Session } from '../store/session-types'
 import { shellEscape } from '../lib/shell'
 import { getXtermTheme } from '../lib/terminal-theme'
 import { safePort } from '../lib/utils'
 import { stripAnsi, detectLocalhostUrl } from '../lib/localhost-url'
 import '@xterm/xterm/css/xterm.css'
+
+/**
+ * True for tabs whose notifications come from Claude Code's own lifecycle hooks
+ * (main process, agent-event-manager). Those carry the real event and the real
+ * message, so the text heuristic below must not notify for them a second time.
+ * It still runs for these tabs to set `promptWaiting` for the sidebar.
+ *
+ * Every other provider (Antigravity, Codex, `claude agents`, plain terminals,
+ * remote sessions) exposes no hooks, so the heuristic stays their only signal.
+ * Mirrors the `isClaudeCode` predicate in components/session/SessionItem.tsx.
+ */
+function hasHookNotifications(session: Session | undefined): boolean {
+  return (
+    session?.claudeMode === true &&
+    !session.claudeAgentsMode &&
+    !session.antigravityMode &&
+    !session.codexMode &&
+    session.sessionType === 'local'
+  )
+}
 
 function detectPrompt(buffer: string): string | null {
   // Collapse whitespace for matching (ANSI stripping removes cursor positioning,
@@ -270,13 +291,16 @@ export function useTerminal(sessionId: string) {
         const promptType = detectPrompt(outputBuffer)
         setSessionPromptWaiting(sessionId, promptType)
         console.log('[notification] Idle detected, prompt check:', promptType, '| buffer tail:', outputBuffer.slice(-100))
-        if (promptType) {
+        const promptSession = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        if (promptType && !hasHookNotifications(promptSession)) {
           notificationTimer = setTimeout(() => {
             const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
             const title = session?.name ?? session?.folderName ?? 'Clave'
             window.electronAPI.showNotification?.({
               title,
-              body: `Claude ${promptType}`,
+              // Reached only by providers without hooks, so the copy stays
+              // provider-neutral rather than naming Claude.
+              body: `This session ${promptType}`,
               sessionId
             })
           }, 3000)

@@ -6,6 +6,7 @@ import * as path from 'path'
 import { app } from 'electron'
 import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS, INITIAL_COMMAND_DELAY_MS } from './constants'
 import { stateFilePath } from './agent-state-manager'
+import { eventFilePath } from './agent-event-manager'
 import { getMcpRuntime, writeSessionMcpConfig, deleteSessionMcpConfig } from './mcp/mcp-runtime'
 
 const isWindows = process.platform === 'win32'
@@ -26,13 +27,26 @@ function isValidClaudeSessionId(id: string): boolean {
 }
 
 /**
- * Build the `--settings` argument that wires Claude Code lifecycle hooks to a
- * per-session state file owned by agent-state-manager. Returns a fully
+ * Build the `--settings` argument that wires Claude Code lifecycle hooks to two
+ * per-session files: a state word file owned by agent-state-manager, and a
+ * notification event log owned by agent-event-manager. Returns a fully
  * shell-quoted token ready to drop into the `zsh -lc '<cmd>'` command string,
- * or null on Windows (hooks use POSIX `printf`/`grep`; the app ships macOS-only).
+ * or null on Windows (hooks use POSIX `printf`/`grep`/`cat`; the app ships macOS-only).
  *
  * State words written: idle (start), working (prompt/tool activity), blocked
  * (permission/elicitation prompt), done (turn complete), ended (session end).
+ *
+ * The Notification event carries the payload the user actually needs to see
+ * ("Claude is waiting for your input", "Claude needs your permission to use
+ * Bash"), so a second hook on that event appends the raw hook stdin verbatim to
+ * `<userData>/agent-events/<claveSessionId>.jsonl`. Verified against CC 2.1.233:
+ * each hook command in a group is spawned with its own copy of the payload on
+ * stdin, so the `grep` above and the `cat` here both see the full record; and CC
+ * writes that payload as compact single-line JSON with one trailing newline, so
+ * `cat >>` produces valid JSONL. No `matcher` is set, so every notification type
+ * is captured and the filtering happens in agent-event-manager where unknown
+ * types can be handled deliberately.
+ *
  * `--settings` merges with (never replaces) the user's own settings.
  */
 function buildClaudeHookSettingsArg(claveSessionId: string): string | null {
@@ -43,6 +57,9 @@ function buildClaudeHookSettingsArg(claveSessionId: string): string | null {
   // so a vanished userData dir (cleanup script, manual delete) must not turn
   // every lifecycle hook into a visible "No such file or directory" error.
   const qDir = JSON.stringify(path.dirname(statePath))
+  const eventsPath = eventFilePath(claveSessionId)
+  const qEvents = JSON.stringify(eventsPath)
+  const qEventsDir = JSON.stringify(path.dirname(eventsPath))
   const write = (word: string): { hooks: { type: 'command'; command: string }[] } => ({
     hooks: [{ type: 'command', command: `mkdir -p ${qDir} && printf ${word} > ${q}` }]
   })
@@ -53,14 +70,19 @@ function buildClaudeHookSettingsArg(claveSessionId: string): string | null {
       PreToolUse: [write('working')],
       PostToolUse: [write('working')],
       // Notification fires for both permission prompts and ~60s idle. Only the
-      // permission/elicitation case is a real "blocked"; match the payload text
-      // (robust to the exact field name) and ignore the idle case.
+      // permission/elicitation case is a real "blocked" for the sidebar dot;
+      // match the payload text (robust to the exact field name) and ignore the
+      // idle case. The second command keeps the whole payload for the notifier.
       Notification: [
         {
           hooks: [
             {
               type: 'command',
               command: `grep -qiE "permission|elicitation" && mkdir -p ${qDir} && printf blocked > ${q} || true`
+            },
+            {
+              type: 'command',
+              command: `mkdir -p ${qEventsDir} && cat >> ${qEvents} || true`
             }
           ]
         }
@@ -465,6 +487,10 @@ export interface PtySession {
   folderName: string
   ptyProcess: pty.IPty | null
   alive: boolean
+  /** The tab label as the user sees it, mirrored from the renderer on every
+   *  rename (see setSessionDisplayName). Undefined means the tab still shows
+   *  `folderName`. Main needs this to title notifications it raises itself. */
+  displayName?: string
   claudeSessionId?: string
   /** Set when this session is backed by a tmux session (the tmux session name). */
   tmuxName?: string
@@ -591,6 +617,7 @@ class PtyManager {
     let spawnFile = shellName
     let spawnArgs = shellArgs
     let tmuxName: string | undefined
+    let adoptedDisplayName: string | undefined
 
     const tmuxPath = options?.tmuxMode ? detectTmux() : null
     if (tmuxPath) {
@@ -604,6 +631,7 @@ class PtyManager {
       // forward — otherwise re-adopting a session would erase the very name we
       // persisted for it and the next crash would show the folder name again.
       const previous = adopt ? readTmuxSidecar(candidateName) : null
+      adoptedDisplayName = previous?.displayName
 
       // Persist restore metadata first. If we can't track the session, fall back
       // to a plain shell spawn rather than create an untrackable tmux session.
@@ -669,6 +697,10 @@ class PtyManager {
     }
     if (claudeSessionId) session.claudeSessionId = claudeSessionId
     if (tmuxName) session.tmuxName = tmuxName
+    // Adoption restores the tab under its persisted name, so carry it into the
+    // in-memory record too — otherwise main would title notifications for a
+    // re-adopted tab with the folder name until the next rename.
+    if (adoptedDisplayName) session.displayName = adoptedDisplayName
     this.sessions.set(id, session)
     return session
   }
@@ -829,11 +861,16 @@ class PtyManager {
     displayName: string | null,
     nameSource: SessionNameSource
   ): void {
-    const tmuxName = this.sessions.get(id)?.tmuxName
+    const session = this.sessions.get(id)
+    const next = displayName?.trim() || undefined
+    // Mirror into the in-memory record first: notifications raised by main
+    // (agent-event-manager) are titled with the tab name, and that has to work
+    // for non-tmux sessions too, which have no sidecar.
+    if (session) session.displayName = next
+    const tmuxName = session?.tmuxName
     if (!tmuxName) return
     const meta = readTmuxSidecar(tmuxName)
     if (!meta) return
-    const next = displayName?.trim() || undefined
     if (meta.displayName === next && sidecarNameSource(meta) === nameSource) return
     writeTmuxSidecar({
       ...meta,
@@ -841,6 +878,17 @@ class PtyManager {
       nameSource,
       userRenamed: nameSource === 'user'
     })
+  }
+
+  /**
+   * The label to show for a session: its tab name, or the folder name when it
+   * was never renamed. Returns null for an unknown id, which also serves as the
+   * "is this session still tracked" check for notifications raised from main.
+   */
+  getSessionLabel(id: string): string | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    return session.displayName?.trim() || session.folderName
   }
 
   /**
