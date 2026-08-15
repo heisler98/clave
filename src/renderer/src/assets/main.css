@@ -779,6 +779,30 @@ button.extension-card:hover {
   color: var(--text-tertiary);
 }
 
+/* ── Meters ── */
+/* Horizontal progress track for a consumed-out-of-total value (Claude Code
+   usage limits in settings and in the toolbar popover). The caller sets two
+   custom properties on the track: --meter-value (a width percentage) and
+   --meter-color (any theme color token), so urgency coloring lives with the
+   data while shape, radius, and motion stay here. */
+.meter {
+  height: 0.5rem;          /* h-2 */
+  width: 100%;
+  overflow: hidden;
+  border-radius: 9999px;   /* rounded-full */
+  background-color: var(--surface-200);
+}
+.meter-fill {
+  display: block;
+  height: 100%;
+  width: var(--meter-value, 0%);
+  border-radius: 9999px;
+  background-color: var(--meter-color, var(--color-accent));
+  transition:
+    width 300ms var(--ease-out-expo),
+    background-color 150ms;
+}
+
 /* Markdown page editor: the Notion-style editable document surface
    (components/files/MarkdownPageEditor.tsx). Element styles mirror the `page`
    variant in MarkdownRenderer so the editable page and the read-only page

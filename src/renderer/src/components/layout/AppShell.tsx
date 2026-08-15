@@ -25,6 +25,7 @@ import { usePinnedStore } from '../../store/pinned-store'
 import { initMcpDispatcher } from '../../lib/mcp-dispatcher'
 import { initSecretStore } from '../../store/secret-store'
 import { ToolbarSecretPopover } from './ToolbarSecretPopover'
+import { ToolbarUsagePopover } from './ToolbarUsagePopover'
 import { resolveColorHex } from '../../store/session-types'
 import { getTerminalIconComponent } from '../ui/GroupCommandDialog'
 import { ToolbarTerminalPopover } from './ToolbarTerminalPopover'
@@ -634,6 +635,7 @@ export function AppShell() {
               <ToolbarActiveUrls />
               <ToolbarQuickActions />
               <ToolbarSecretPopover />
+              <ToolbarUsagePopover />
               {/* File palette button */}
               <button
                 onClick={toggleFilePalette}
