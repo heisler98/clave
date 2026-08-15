@@ -47,8 +47,11 @@ const electronAPI = {
 
   listSessions: () => ipcRenderer.invoke('pty:list'),
 
-  setSessionDisplayName: (id: string, displayName: string | null, userRenamed: boolean) =>
-    ipcRenderer.invoke('session:set-display-name', id, displayName, userRenamed),
+  setSessionDisplayName: (
+    id: string,
+    displayName: string | null,
+    nameSource: 'auto' | 'preset' | 'user'
+  ) => ipcRenderer.invoke('session:set-display-name', id, displayName, nameSource),
 
   tmuxAvailable: () => ipcRenderer.invoke('tmux:available'),
 

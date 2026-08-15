@@ -12,12 +12,13 @@ import type {
   ActiveView,
   SettingsSection,
   ExtensionsSection,
-  SessionType
+  SessionType,
+  SessionNameSource
 } from './session-types'
 import type { Agent, AgentStatus } from '../../../shared/remote-types'
 
 // Re-export types and constants so existing imports continue to work
-export type { Theme, AppIcon, ActivityStatus, GroupTerminalConfig, GroupTerminalColor, GroupTerminalIcon, Session, SessionGroup, FileTab, ActiveView, SettingsSection, ExtensionsSection, SessionType }
+export type { Theme, AppIcon, ActivityStatus, GroupTerminalConfig, GroupTerminalColor, GroupTerminalIcon, Session, SessionGroup, FileTab, ActiveView, SettingsSection, ExtensionsSection, SessionType, SessionNameSource }
 export { GROUP_TERMINAL_COLORS, GROUP_TERMINAL_ICONS, TERMINAL_COLOR_VALUES, resolveColorHex } from './session-types'
 
 interface SessionState {
@@ -110,7 +111,11 @@ interface SessionState {
   setSessionServerStatus: (id: string, status: import('./session-types').ServerStatus) => void
   setSessionServerCommand: (id: string, command: string | null) => void
   setSessionUnseenActivity: (id: string, unseen: boolean) => void
+  /** The human typed this name. Immune to auto-titling from here on. */
   renameSession: (id: string, name: string) => void
+  /** A `.clave` file, a pin, or an MCP call supplied this name. It is a slot
+   *  label, so a generated title is still allowed to replace it. */
+  presetSessionName: (id: string, name: string) => void
   autoRenameSession: (id: string, name: string) => void
   resetSessionName: (id: string) => void
   setSessionPlanFile: (id: string, path: string) => void
@@ -192,12 +197,12 @@ function persistSessionName(
   id: string,
   name: string,
   folderName: string,
-  userRenamed: boolean
+  nameSource: SessionNameSource
 ): void {
   window.electronAPI?.setSessionDisplayName?.(
     id,
     name === folderName ? null : name,
-    userRenamed
+    nameSource
   ).catch(() => {
     // Non-fatal: the name still applies for this run, it just won't survive.
   })
@@ -339,7 +344,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   sidebarUndoStack: [] as SidebarSnapshot[],
   addSession: (session) =>
     set((state) => {
-      const newSession = { ...session, antigravityMode: session.antigravityMode ?? false, codexMode: session.codexMode ?? false, claudeAgentsMode: session.claudeAgentsMode ?? false, detectedUrl: session.detectedUrl ?? null, serverStatus: session.serverStatus ?? null, serverCommand: session.serverCommand ?? null, hasUnseenActivity: session.hasUnseenActivity ?? false, userRenamed: session.userRenamed ?? false, planFilePath: session.planFilePath ?? null }
+      const newSession = { ...session, antigravityMode: session.antigravityMode ?? false, codexMode: session.codexMode ?? false, claudeAgentsMode: session.claudeAgentsMode ?? false, detectedUrl: session.detectedUrl ?? null, serverStatus: session.serverStatus ?? null, serverCommand: session.serverCommand ?? null, hasUnseenActivity: session.hasUnseenActivity ?? false, nameSource: session.nameSource ?? 'auto', planFilePath: session.planFilePath ?? null }
 
       // Check if selected sessions all belong to a single group
       const selectedIds = state.selectedSessionIds
@@ -893,30 +898,47 @@ export const useSessionStore = create<SessionState>((set) => ({
     const session = useSessionStore.getState().sessions.find((s) => s.id === id)
     if (!session) return
     const next = name.trim() || session.folderName
-    persistSessionName(id, next, session.folderName, true)
+    persistSessionName(id, next, session.folderName, 'user')
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, name: next, userRenamed: true } : s
+        s.id === id ? { ...s, name: next, nameSource: 'user' as const } : s
+      )
+    }))
+  },
+
+  presetSessionName: (id, name) => {
+    const session = useSessionStore.getState().sessions.find((s) => s.id === id)
+    if (!session) return
+    const next = name.trim() || session.folderName
+    persistSessionName(id, next, session.folderName, 'preset')
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, name: next, nameSource: 'preset' as const } : s
       )
     }))
   },
 
   autoRenameSession: (id, name) => {
     const session = useSessionStore.getState().sessions.find((s) => s.id === id)
-    if (!session || session.userRenamed) return
+    // A preset name is a placeholder from a .clave file, a pin, or an MCP call,
+    // so a generated title is welcome to replace it. Only a name the human typed
+    // is protected.
+    if (!session || session.nameSource === 'user') return
     const next = name.trim() || session.name
-    persistSessionName(id, next, session.folderName, false)
+    persistSessionName(id, next, session.folderName, 'auto')
     set((state) => ({
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, name: next } : s))
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, name: next, nameSource: 'auto' as const } : s
+      )
     }))
   },
 
   resetSessionName: (id) => {
     const session = useSessionStore.getState().sessions.find((s) => s.id === id)
-    if (session) persistSessionName(id, session.folderName, session.folderName, false)
+    if (session) persistSessionName(id, session.folderName, session.folderName, 'auto')
     set((state) => ({
       sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, name: s.folderName, userRenamed: false } : s
+        s.id === id ? { ...s, name: s.folderName, nameSource: 'auto' as const } : s
       )
     }))
   },
@@ -1114,7 +1136,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         serverStatus: null,
         serverCommand: null,
         hasUnseenActivity: false,
-        userRenamed: false,
+        nameSource: 'auto',
         planFilePath: null
       }
       return {

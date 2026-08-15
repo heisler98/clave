@@ -113,6 +113,17 @@ export interface GroupTerminalConfig {
 
 export type ServerStatus = 'running' | 'stopped' | 'starting' | null
 
+/**
+ * Where a session's tab name came from, which decides whether the auto-title
+ * generator is allowed to replace it.
+ *
+ * - `'user'`   the human typed this name in the sidebar. Never overwritten.
+ * - `'preset'` a `.clave` file, a pin, or an MCP call supplied it. A slot label
+ *   that a generated title may replace once the agent produces one.
+ * - `'auto'`   the folder name, or a title the generator produced.
+ */
+export type SessionNameSource = 'auto' | 'preset' | 'user'
+
 export interface Session {
   id: string
   cwd: string
@@ -148,7 +159,8 @@ export interface Session {
   serverStatus: ServerStatus
   serverCommand: string | null
   hasUnseenActivity: boolean
-  userRenamed: boolean
+  /** Provenance of `name`. Only `'user'` blocks the auto-title generator. */
+  nameSource: SessionNameSource
   planFilePath: string | null
 }
 

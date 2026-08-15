@@ -215,11 +215,13 @@ export async function openSessionProgrammatically(payload: {
     serverStatus: null,
     serverCommand: null,
     hasUnseenActivity: false,
-    userRenamed: false,
+    nameSource: 'auto',
     planFilePath: null
   })
-  // renameSession sets userRenamed, protecting the name from auto-title overwrite.
-  if (payload.name) useSessionStore.getState().renameSession(info.id, payload.name)
+  // A name passed to clave_open_session is a slot label the agent picked, so it
+  // is recorded as a preset: shown immediately, and still replaceable by the
+  // auto-title generator once the session produces a real title.
+  if (payload.name) useSessionStore.getState().presetSessionName(info.id, payload.name)
   if (targetGroup) {
     useSessionStore.getState().moveItems([info.id], targetGroup.id, 'inside')
   } else if (groupOfSession(useSessionStore.getState().groups, info.id)) {
@@ -325,7 +327,7 @@ async function handleAddGroupTerminal(payload: {
         serverStatus: null,
         serverCommand: null,
         hasUnseenActivity: false,
-        userRenamed: false,
+        nameSource: 'auto' as const,
         planFilePath: null
       }
     ],

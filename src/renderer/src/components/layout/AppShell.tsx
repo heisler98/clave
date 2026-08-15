@@ -173,10 +173,12 @@ export function AppShell() {
               id: info.id,
               cwd: info.cwd,
               folderName: info.folderName,
-              // Restore the label the user last saw. `userRenamed` comes back
+              // Restore the label the user last saw. `nameSource` comes back
               // too, so an explicit rename keeps its immunity to auto-titling.
+              // Sidecars written before nameSource existed carry only the old
+              // `userRenamed` boolean, so fall back to it.
               name: s.displayName || s.folderName,
-              userRenamed: s.userRenamed === true,
+              nameSource: s.nameSource ?? (s.userRenamed === true ? 'user' : 'auto'),
               alive: info.alive,
               activityStatus: 'idle',
               promptWaiting: null,

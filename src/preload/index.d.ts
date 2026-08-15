@@ -116,6 +116,9 @@ export interface SessionInfo {
   claudeSessionId: string | null
 }
 
+/** Where a session's tab name came from. Only 'user' blocks auto-titling. */
+export type SessionNameSource = 'auto' | 'preset' | 'user'
+
 export interface AdoptableTmuxSession {
   tmuxName: string
   id: string
@@ -124,7 +127,11 @@ export interface AdoptableTmuxSession {
   folderName: string
   /** Tab label the user last saw (rename or auto-title); absent → folderName. */
   displayName?: string
-  /** True when displayName came from an explicit rename (blocks auto-titling). */
+  /** Provenance of displayName. Absent on sidecars written before this field
+   *  existed, where `userRenamed` is the fallback. */
+  nameSource?: SessionNameSource
+  /** Legacy mirror of nameSource === 'user', still written so a downgrade to an
+   *  older Clave keeps honouring explicit renames. */
   userRenamed?: boolean
   claudeMode: boolean
   antigravityMode: boolean
@@ -289,7 +296,7 @@ export interface ElectronAPI {
   setSessionDisplayName: (
     id: string,
     displayName: string | null,
-    userRenamed: boolean
+    nameSource: SessionNameSource
   ) => Promise<void>
   tmuxAvailable: () => Promise<boolean>
   tmuxListAdoptable: () => Promise<AdoptableTmuxSession[]>

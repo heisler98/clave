@@ -1,5 +1,10 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { ptyManager, isTmuxAvailable, type PtySpawnOptions } from '../pty-manager'
+import {
+  ptyManager,
+  isTmuxAvailable,
+  type PtySpawnOptions,
+  type SessionNameSource
+} from '../pty-manager'
 import { getPreference } from './clave-file-handlers'
 import * as titleGenerator from '../title-generator'
 import { startWatching as startAgentStateWatching, clearState as clearAgentState } from '../agent-state-manager'
@@ -111,8 +116,12 @@ export function registerPtyHandlers(): void {
   // restart, a crash, or a reboot instead of reverting to the folder name.
   ipcMain.handle(
     'session:set-display-name',
-    (_event, id: string, displayName: string | null, userRenamed: boolean) => {
-      ptyManager.setSessionDisplayName(id, displayName, userRenamed === true)
+    (_event, id: string, displayName: string | null, nameSource: unknown) => {
+      // Anything unrecognized degrades to 'auto', which is the permissive case:
+      // a bad value can never accidentally lock a tab out of auto-titling.
+      const source: SessionNameSource =
+        nameSource === 'user' || nameSource === 'preset' ? nameSource : 'auto'
+      ptyManager.setSessionDisplayName(id, displayName, source)
     }
   )
 

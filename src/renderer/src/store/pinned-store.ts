@@ -601,8 +601,11 @@ async function spawnPinnedGroup(
         hasUnseenActivity: false
       })
 
+      // A `.clave`/pin name is a slot label, so it is recorded as a preset: the
+      // tab shows it right away, and the auto-title generator may still replace
+      // it once the agent produces a real title.
       if (session.name !== sessionInfo.folderName) {
-        useSessionStore.getState().renameSession(sessionInfo.id, session.name)
+        useSessionStore.getState().presetSessionName(sessionInfo.id, session.name)
       }
 
       spawnedIds.push(sessionInfo.id)

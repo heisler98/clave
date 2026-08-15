@@ -277,6 +277,10 @@ function baseTmuxName(cwd: string, modeTag: string): string {
 // session is gone, and reap any stray `clave-*` session that has no sidecar —
 // so nothing can pile up invisibly.
 
+/** Provenance of a session's tab name. Mirrors the renderer's SessionNameSource
+ *  (`src/renderer/src/store/session-types.ts`); main can't import from there. */
+export type SessionNameSource = 'auto' | 'preset' | 'user'
+
 /** What the renderer needs to recreate + reattach a surviving session's tab. */
 export interface AdoptableTmuxSession {
   tmuxName: string
@@ -290,8 +294,14 @@ export interface AdoptableTmuxSession {
    *  title. Absent means the tab still shows `folderName`. Kept in the sidecar
    *  (not just renderer memory) so a crash or reboot can't revert the name. */
   displayName?: string
-  /** True when `displayName` came from an explicit rename, which protects it
-   *  from being overwritten by the auto-title generator after re-adoption. */
+  /** Where `displayName` came from: `'user'` (typed in the sidebar) protects it
+   *  from the auto-title generator after re-adoption, `'preset'` (a `.clave`
+   *  file, a pin, or an MCP call) and `'auto'` do not. Absent on sidecars
+   *  written before this field existed — read `userRenamed` instead. */
+  nameSource?: SessionNameSource
+  /** Legacy mirror of `nameSource === 'user'`. Still written so a sidecar stays
+   *  readable by an older Clave, and still read as the fallback for sidecars
+   *  that predate `nameSource`. */
   userRenamed?: boolean
   claudeMode: boolean
   antigravityMode: boolean
@@ -352,6 +362,15 @@ function readTmuxSidecar(tmuxName: string): AdoptableTmuxSession | null {
   } catch {
     return null
   }
+}
+
+/** Read a sidecar's name provenance. Sidecars written before `nameSource`
+ *  existed carry only the `userRenamed` boolean, so map that forward. */
+function sidecarNameSource(meta: AdoptableTmuxSession): SessionNameSource {
+  if (meta.nameSource === 'auto' || meta.nameSource === 'preset' || meta.nameSource === 'user') {
+    return meta.nameSource
+  }
+  return meta.userRenamed === true ? 'user' : 'auto'
 }
 
 function deleteTmuxSidecar(tmuxName: string): void {
@@ -591,7 +610,8 @@ class PtyManager {
       const sidecarOk = writeTmuxSidecar({
         tmuxName: candidateName,
         displayName: previous?.displayName,
-        userRenamed: previous?.userRenamed,
+        nameSource: previous ? sidecarNameSource(previous) : undefined,
+        userRenamed: previous ? sidecarNameSource(previous) === 'user' : undefined,
         id,
         claudeSessionId,
         cwd,
@@ -800,15 +820,27 @@ class PtyManager {
    * which dies with the window — the sidecar is the only per-session record
    * that outlives it. Called on every rename (manual, auto-title, or reset to
    * the folder name); a no-op for sessions with no tmux sidecar to update.
+   *
+   * `userRenamed` is written alongside `nameSource` so sidecars stay readable by
+   * a Clave build that predates `nameSource`.
    */
-  setSessionDisplayName(id: string, displayName: string | null, userRenamed: boolean): void {
+  setSessionDisplayName(
+    id: string,
+    displayName: string | null,
+    nameSource: SessionNameSource
+  ): void {
     const tmuxName = this.sessions.get(id)?.tmuxName
     if (!tmuxName) return
     const meta = readTmuxSidecar(tmuxName)
     if (!meta) return
     const next = displayName?.trim() || undefined
-    if (meta.displayName === next && !!meta.userRenamed === userRenamed) return
-    writeTmuxSidecar({ ...meta, displayName: next, userRenamed })
+    if (meta.displayName === next && sidecarNameSource(meta) === nameSource) return
+    writeTmuxSidecar({
+      ...meta,
+      displayName: next,
+      nameSource,
+      userRenamed: nameSource === 'user'
+    })
   }
 
   /**
