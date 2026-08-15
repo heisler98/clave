@@ -220,6 +220,13 @@ function getTmuxConfigPath(): string {
     // If a second client (e.g. an external `tmux attach`) joins, follow the
     // most-recently-active client's size instead of shrinking to the smallest.
     'set -g window-size latest',
+    // Let the agent's OSC notification and progress sequences reach the outer
+    // terminal instead of being swallowed by tmux.
+    'set -g allow-passthrough on',
+    // Extended keys make modified keys (Shift+Enter above all) distinguishable
+    // at the tmux layer, which is what Anthropic's terminal-config docs ask for.
+    'set -s extended-keys on',
+    "set -as terminal-features 'xterm*:extkeys'",
     ''
   ].join('\n')
   const p = path.join(app.getPath('userData'), 'clave.tmux.conf')

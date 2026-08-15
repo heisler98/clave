@@ -171,6 +171,34 @@ export function useRemoteTerminal(shellId: string) {
         window.electronAPI.sshShellWrite(shellId, '\x1bf')
         return false
       }
+      // macOS Cmd combos are never encoded into terminal input by the OS, so the
+      // readline control bytes are synthesized here the way iTerm and Ghostty do.
+      // preventDefault() also stops AppShell's window-level shortcuts from seeing
+      // these keys (it bails on e.defaultPrevented).
+      // Cmd+Left → start of line (Ctrl-A)
+      if (e.key === 'ArrowLeft' && e.metaKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault()
+        window.electronAPI.sshShellWrite(shellId, '\x01')
+        return false
+      }
+      // Cmd+Right → end of line (Ctrl-E)
+      if (e.key === 'ArrowRight' && e.metaKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault()
+        window.electronAPI.sshShellWrite(shellId, '\x05')
+        return false
+      }
+      // Cmd+Backspace → delete to start of line (Ctrl-U)
+      if (e.key === 'Backspace' && e.metaKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault()
+        window.electronAPI.sshShellWrite(shellId, '\x15')
+        return false
+      }
+      // Cmd+Delete (fn+Delete) → delete to end of line (Ctrl-K)
+      if (e.key === 'Delete' && e.metaKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault()
+        window.electronAPI.sshShellWrite(shellId, '\x0b')
+        return false
+      }
       return true
     })
 

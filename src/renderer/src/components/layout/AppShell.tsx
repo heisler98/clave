@@ -288,6 +288,12 @@ export function AppShell() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // The terminal's custom key handler runs first (it is bound to the textarea
+      // inside the terminal, this listener is on `window` in the bubble phase) and
+      // calls preventDefault() on every combo it consumes — Cmd+Backspace, Cmd+arrows,
+      // Option+word motions. Bailing here keeps app shortcuts from firing on a
+      // keystroke the focused terminal already handled.
+      if (e.defaultPrevented) return
       if (e.metaKey && e.key === 'p') {
         e.preventDefault()
         toggleFilePalette()
@@ -363,8 +369,9 @@ export function AppShell() {
           removeFileTab(sid)
         }
       }
-      // Cmd+Delete: Close focused session
-      if (e.metaKey && e.key === 'Backspace') {
+      // Cmd+Shift+W: Close the focused session. Deliberately away from
+      // Cmd+Backspace, which the terminal uses to delete to the start of the line.
+      if (e.metaKey && e.shiftKey && (e.key === 'w' || e.key === 'W')) {
         e.preventDefault()
         const sid = useSessionStore.getState().focusedSessionId
         if (sid) {

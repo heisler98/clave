@@ -42,7 +42,7 @@ See the **Session Groups** doc for more on pinned groups and .clave files.
 
 ## Closing Sessions
 
-- **Cmd+Backspace**: Kill the focused session
+- **Cmd+Shift+W**: Close the focused session
 - Right-click a session in the sidebar and close it
 
 ## Auto-Naming
