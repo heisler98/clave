@@ -40,7 +40,10 @@ export function registerPtyHandlers(): void {
     // caller overrides per-spawn or the user explicitly turned it off. (When
     // tmux isn't installed the spawn transparently falls back to a plain shell.)
     const tmuxMode = options?.tmuxMode ?? getPreference('tmuxMode') !== false
-    const session = ptyManager.spawn(cwd, { ...options, tmuxMode })
+    // Same shape for Clave's own MCP server: a global setting, ON by default,
+    // overridable per spawn.
+    const claveMcp = options?.claveMcp ?? getPreference('claveMcpEnabled') !== false
+    const session = ptyManager.spawn(cwd, { ...options, tmuxMode, claveMcp })
     // Adoption reuses the previous run's session id, so an event file from that
     // run can still be on disk. Start every session from an empty log.
     clearAgentEvents(session.id)

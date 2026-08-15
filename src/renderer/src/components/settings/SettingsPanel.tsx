@@ -345,6 +345,8 @@ function ClaudeProfilesSection() {
 function SessionsSection() {
   const tmuxMode = useSessionStore((s) => s.tmuxMode)
   const setTmuxMode = useSessionStore((s) => s.setTmuxMode)
+  const claveMcpEnabled = useSessionStore((s) => s.claveMcpEnabled)
+  const setClaveMcpEnabled = useSessionStore((s) => s.setClaveMcpEnabled)
   const [tmuxAvailable, setTmuxAvailable] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -372,6 +374,12 @@ function SessionsSection() {
           checked={tmuxMode && !unavailable}
           onChange={setTmuxMode}
           disabled={unavailable}
+        />
+        <ToggleRow
+          label="Clave tools for agents"
+          description="Give Claude sessions the clave_ tools, so an agent can open tabs, create groups, launch workspaces, and send you notifications. Turn it off to start sessions with no access to Clave itself. Applies to sessions started after this changes."
+          checked={claveMcpEnabled}
+          onChange={setClaveMcpEnabled}
         />
         <NewSessionFolderRow />
         <MicrophoneRow />

@@ -457,6 +457,9 @@ export interface PtySpawnOptions {
   initialPrompt?: string
   /** Opt-in: run this session inside a persistent tmux session. */
   tmuxMode?: boolean
+  /** Expose Clave's own MCP server to this session. Defaults to on; set false
+   *  to spawn without `--mcp-config`, so the agent gets no clave_* tools. */
+  claveMcp?: boolean
   /** Reattach to this exact existing tmux session instead of deriving a new
    *  name. Set when adopting a session that survived a previous app run. */
   adoptTmuxName?: string
@@ -596,7 +599,10 @@ class PtyManager {
         // Wire the in-app MCP server so the agent can manipulate Clave (open
         // tabs, create groups). The config rides in a 0600 file rather than
         // inline JSON to keep the bearer token off ps/tmux-visible command lines.
-        const mcpConfigPath = getMcpRuntime() ? writeSessionMcpConfig(id) : null
+        // Skipped entirely when the user turns the server off, so no config
+        // file is written and the agent sees no clave_* tools at all.
+        const mcpConfigPath =
+          options?.claveMcp !== false && getMcpRuntime() ? writeSessionMcpConfig(id) : null
         if (mcpConfigPath) parts.push('--mcp-config', shellSingleQuote(mcpConfigPath))
         // Initial prompt goes LAST after a `--` separator. `--` ends the
         // variadic --mcp-config (so the prompt isn't read as another config

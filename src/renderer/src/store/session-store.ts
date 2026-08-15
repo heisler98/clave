@@ -35,6 +35,10 @@ interface SessionState {
   /** Run new sessions inside persistent tmux sessions. On by default; falls
    *  back to a plain shell automatically when tmux isn't installed. */
   tmuxMode: boolean
+  /** Expose Clave's own MCP server to new Claude sessions, letting the agent
+   *  open tabs, create groups, and notify. On by default. Turning it off only
+   *  affects sessions spawned afterwards. */
+  claveMcpEnabled: boolean
   searchQuery: string
   claudeMode: boolean
   antigravityMode: boolean
@@ -103,6 +107,7 @@ interface SessionState {
   setTheme: (theme: Theme) => void
   setAppIcon: (icon: AppIcon) => void
   setTmuxMode: (enabled: boolean) => void
+  setClaveMcpEnabled: (enabled: boolean) => void
   updateSessionAlive: (id: string, alive: boolean) => void
   setSessionActivity: (id: string, status: ActivityStatus) => void
   setAgentState: (id: string, state: import('./session-types').AgentRunState) => void
@@ -307,6 +312,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   theme: (localStorage.getItem('clave-theme') as Theme) || 'light',
   appIcon: (localStorage.getItem('clave-app-icon') as AppIcon) || 'dark',
   tmuxMode: localStorage.getItem('clave-tmux-mode') !== 'false',
+  claveMcpEnabled: localStorage.getItem('clave-mcp-enabled') !== 'false',
   searchQuery: '',
   claudeMode: true,
   antigravityMode: false,
@@ -804,6 +810,13 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ tmuxMode })
     // Persist to the main process too: pty:spawn reads this as the default.
     window.electronAPI?.preferencesSet('tmuxMode', tmuxMode)
+  },
+
+  setClaveMcpEnabled: (claveMcpEnabled) => {
+    localStorage.setItem('clave-mcp-enabled', String(claveMcpEnabled))
+    set({ claveMcpEnabled })
+    // Persist to the main process too: pty:spawn reads this as the default.
+    window.electronAPI?.preferencesSet('claveMcpEnabled', claveMcpEnabled)
   },
 
   updateSessionAlive: (id, alive) =>
