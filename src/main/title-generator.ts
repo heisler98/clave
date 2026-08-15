@@ -29,6 +29,9 @@ const sessions = new Map<string, SessionEntry>()
 interface TitleJob {
   sessionId: string
   userMessage: string
+  /** Session cwd — the CLI runs there so its throwaway transcript lands in the
+   *  project's own directory instead of polluting ~/.claude/projects/-/. */
+  cwd: string
   resolve: (title: string) => void
   reject: (err: Error) => void
 }
@@ -41,7 +44,7 @@ function processNextTitle(): void {
   if (activeTitleJobs >= MAX_CONCURRENT_TITLES || titleQueue.length === 0) return
   const job = titleQueue.shift()!
   activeTitleJobs++
-  runTitleGeneration(job.sessionId, job.userMessage)
+  runTitleGeneration(job.sessionId, job.userMessage, job.cwd)
     .then(job.resolve)
     .catch(job.reject)
     .finally(() => {
@@ -205,13 +208,17 @@ async function processJsonl(sessionId: string, entry: SessionEntry): Promise<voi
   if (!entry.titleDone) {
     for (const line of lines) {
       if (!line.includes('"type":"user"')) continue
-      const userMessage = parseUserMessage(line)
-      if (!userMessage || !isValidMessage(userMessage)) continue
+      const raw = parseUserMessage(line)
+      if (!raw) continue
+      // Skip-and-keep-scanning: a line that is Claude Code's own bookkeeping must
+      // not latch titleDone, or the session is stuck with a garbage title forever.
+      const userMessage = sanitizeUserMessage(raw)
+      if (!userMessage) continue
 
       entry.titleDone = true
       console.log(`[title-gen] Session ${sessionId} message: "${userMessage.slice(0, 80)}"`)
 
-      generateTitle(sessionId, userMessage)
+      generateTitle(sessionId, userMessage, entry.cwd)
         .then((title) => {
           if (entry.win && !entry.win.isDestroyed()) {
             entry.win.webContents.send(`session:auto-title:${sessionId}`, title)
@@ -249,6 +256,9 @@ async function processJsonl(sessionId: string, entry: SessionEntry): Promise<voi
 function parseUserMessage(line: string): string | null {
   try {
     const entry = JSON.parse(line)
+    // Claude Code's own marker for "not a real user turn" — the local-command
+    // caveat, session reminders, and other injected entries all carry it.
+    if (entry.isMeta === true) return null
     if (entry.type === 'user' && entry.message?.content) {
       const text =
         typeof entry.message.content === 'string'
@@ -284,14 +294,14 @@ function extractPlanPath(entry: Record<string, unknown>): string | null {
 
 // --- Title generation ---
 
-function generateTitle(sessionId: string, userMessage: string): Promise<string> {
+function generateTitle(sessionId: string, userMessage: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    titleQueue.push({ sessionId, userMessage, resolve, reject })
+    titleQueue.push({ sessionId, userMessage, cwd, resolve, reject })
     processNextTitle()
   })
 }
 
-function runTitleGeneration(sessionId: string, userMessage: string): Promise<string> {
+function runTitleGeneration(sessionId: string, userMessage: string, cwd: string): Promise<string> {
   const prompt = `Generate a short 2-4 word title for this Claude Code terminal session based on what the user asked.
 Rules:
 - Return ONLY the title, no quotes, no explanation
@@ -305,11 +315,15 @@ ${userMessage}`
   const env = { ...getLoginShellEnv() }
   delete env.CLAUDECODE
 
+  // Without a cwd the CLI inherits Electron's (usually `/`) and drops a throwaway
+  // transcript into ~/.claude/projects/-/ on every single title generation.
+  const runCwd = existsSync(cwd) ? cwd : undefined
+
   return new Promise<string>((resolve, reject) => {
     const child = execFile(
       'claude',
       ['-p', '--model', 'haiku'],
-      { env, encoding: 'utf-8', maxBuffer: 1024 * 1024, timeout: 15000 },
+      { cwd: runCwd, env, encoding: 'utf-8', maxBuffer: 1024 * 1024, timeout: 15000 },
       (err, stdout, stderr) => {
         if (err) {
           console.error('[title-gen] claude CLI error:', err.message, stderr)
@@ -363,16 +377,68 @@ function isValidMessage(msg: string): boolean {
   return true
 }
 
+/**
+ * Claude Code records its own bookkeeping as `"type":"user"` turns: the local-command
+ * caveat, the slash-command echo, that command's stdout/stderr, and session reminders.
+ * None of it was typed by the user, so none of it may become a title.
+ */
+const WRAPPER_TAGS =
+  'local-command-caveat|local-command-stdout|local-command-stderr|command-name|command-message|command-args|system-reminder'
+
+/** A complete wrapper block, e.g. `<command-name>/usage</command-name>`. */
+const WRAPPER_BLOCK_RE = new RegExp(`<(${WRAPPER_TAGS})\\b[^>]*>[\\s\\S]*?</\\1>`, 'gi')
+
+/**
+ * The same wrapper left unterminated (truncated content) — strip to the end.
+ * Anchored to the start on purpose: a truncated wrapper always leads the entry,
+ * whereas the same tag mid-sentence is a user talking about it.
+ */
+const WRAPPER_OPEN_RE = new RegExp(`^\\s*<(${WRAPPER_TAGS})\\b[^>]*>[\\s\\S]*$`, 'i')
+
+/** A self-closing wrapper, e.g. `<command-args />`. */
+const WRAPPER_SELF_CLOSING_RE = new RegExp(`<(${WRAPPER_TAGS})\\b[^>]*/>`, 'gi')
+
+/** Whatever is left is a lone XML-ish block (`<attachment>…</attachment>`) rather than prose. */
+const LONE_TAG_BLOCK_RE = /^<([a-z][\w:.-]*)\b[^>]*>(?:[\s\S]*<\/\1>\s*)?$/i
+
+/**
+ * Strip Claude Code's synthetic wrappers and return what the user actually typed,
+ * or `null` when nothing meaningful is left. Callers should skip the line and keep
+ * scanning — a later user turn is a far better title than a sanitized wrapper.
+ */
+function sanitizeUserMessage(msg: string): string | null {
+  const stripped = msg
+    .replace(WRAPPER_BLOCK_RE, ' ')
+    .replace(WRAPPER_SELF_CLOSING_RE, ' ')
+    .replace(WRAPPER_OPEN_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!stripped) return null
+  // Defensive: an unlisted wrapper we do not know about yet. A prompt that merely
+  // mentions a tag inline still passes, since only a leading block matches here.
+  if (LONE_TAG_BLOCK_RE.test(stripped)) return null
+  if (!isValidMessage(stripped)) return null
+  return stripped
+}
+
 const PREFIX_RE =
   /^(please\s+|can you\s+|could you\s+|I want to\s+|I need to\s+|I need you to\s+|help me\s+)/i
 
 function heuristicTitle(message: string): string | null {
-  let text = message.split(/\n/)[0].trim()
+  // Backstop: a tab label is never markup. Anything angle-bracketed that survived
+  // the transcript filters gets dropped here rather than rendered in the sidebar.
+  let text = message.split(/\n/)[0]
+  text = text
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[<>]/g, ' ')
+    .trim()
   text = text.replace(PREFIX_RE, '')
   const words = text
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 4)
   if (words.length === 0) return null
-  return words.join(' ').toLowerCase()
+  const title = words.join(' ').toLowerCase().trim()
+  return title || null
 }
