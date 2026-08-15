@@ -18,6 +18,9 @@ export interface NewSessionLaunchOptions {
   cwd?: string
   /** Always open the folder picker (Option, or "Other folder..."). */
   forcePicker?: boolean
+  /** Run inside tmux. Omitted follows the global setting; false is the
+   *  voice-input case (see NewSessionOptions.tmuxMode). */
+  tmuxMode?: boolean
 }
 
 /** How many recent folders the menus list. */
@@ -88,6 +91,11 @@ export function buildNewSessionMenuItems(
       shortcut: '⌘D',
       icon: <ClaudeLogo className="w-3.5 h-3.5" />,
       onClick: () => launch(agent({ claudeMode: true, dangerousMode: true }))
+    },
+    {
+      label: 'Claude Code (no tmux)',
+      icon: <ClaudeLogo className="w-3.5 h-3.5" />,
+      onClick: () => launch(agent({ claudeMode: true, tmuxMode: false }))
     },
     {
       label: 'Claude Agents',

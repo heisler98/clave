@@ -13,6 +13,15 @@ Sessions are the core of Clave. Each session is an independent terminal running 
 
 You can also create sessions from the **+** button in the sidebar.
 
+### Voice input
+
+Claude Code's voice input needs macOS to attribute microphone access to Clave. Persistent
+sessions run inside a tmux server that keeps running after Clave quits, and work started
+under it is attributed to that server instead, so the microphone request goes unanswered.
+
+Pick **Claude Code (no tmux)** from the New session menu for a session that can use voice.
+It runs directly under Clave, and it ends when you quit Clave.
+
 ## Session Status
 
 Each session shows a colored dot in the sidebar:

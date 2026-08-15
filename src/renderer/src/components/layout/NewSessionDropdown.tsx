@@ -132,17 +132,38 @@ export function NewSessionDropdown({ onNewSession, loading, onTriggerContextMenu
     onNewSession({ ...defaultLaunchOptions(), forcePicker: true })
   }, [onNewSession])
 
+  /** Claude Code outside tmux. tmux panes hang off a detached server that
+   *  outlives the app, which is why macOS attributes their work elsewhere and
+   *  voice input goes unanswered. Spawning directly keeps Clave responsible. */
+  const launchWithoutTmux = useCallback(
+    (profileId?: string) => {
+      setOpen(false)
+      onNewSession({
+        claudeMode: true,
+        antigravityMode: false,
+        codexMode: false,
+        claudeAgentsMode: false,
+        dangerousMode: false,
+        claudeProfileId: profileId,
+        tmuxMode: false,
+        forcePicker: optionHeld
+      })
+    },
+    [onNewSession, optionHeld]
+  )
+
   /** A Claude launch row. With >1 profile it becomes a submenu whose entries
    *  each launch under a specific account; otherwise a plain one-click item. */
   const renderClaudeEntry = useCallback(
     (
       label: string,
       shortcut: string | undefined,
-      launch: (profileId?: string) => void
+      launch: (profileId?: string) => void,
+      title?: string
     ) => {
       if (!multiProfile) {
         return (
-          <DropdownMenuItem onSelect={() => launch()}>
+          <DropdownMenuItem onSelect={() => launch()} title={title}>
             <ClaudeLogo className="w-3.5 h-3.5 flex-shrink-0 text-text-tertiary" />
             <span className="flex-1">{label}</span>
             <TargetDirHint dir={targetDir} choosing={optionHeld} />
@@ -152,7 +173,7 @@ export function NewSessionDropdown({ onNewSession, loading, onTriggerContextMenu
       }
       return (
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger title={title}>
             <ClaudeLogo className="w-3.5 h-3.5 flex-shrink-0 text-text-tertiary" />
             <span className="flex-1">{label}</span>
             <TargetDirHint dir={targetDir} choosing={optionHeld} />
@@ -213,6 +234,12 @@ export function NewSessionDropdown({ onNewSession, loading, onTriggerContextMenu
           )}
           {renderClaudeEntry('Claude Code (skip permissions)', '⌘D', (profileId) =>
             handleOption(true, true, undefined, false, false, false, profileId)
+          )}
+          {renderClaudeEntry(
+            'Claude Code (no tmux)',
+            undefined,
+            launchWithoutTmux,
+            'Starts outside tmux so voice input works. This session ends when you quit Clave.'
           )}
           {renderClaudeEntry('Claude Agents', '⌘⇧A', (profileId) =>
             handleOption(false, false, undefined, false, false, true, profileId)

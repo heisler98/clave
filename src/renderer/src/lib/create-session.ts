@@ -21,6 +21,13 @@ export interface NewSessionOptions {
   claudeAgentsMode?: boolean
   /** Claude account/profile. Omitted = the selected default profile. */
   claudeProfileId?: string
+  /** Run this session inside tmux. Omitted follows the global setting.
+   *
+   *  Set false for a session that needs macOS to attribute its work to Clave.
+   *  tmux panes hang off a detached server that outlives the app, so anything
+   *  under one is several generations removed from Clave and is attributed
+   *  elsewhere. Microphone access for voice input is the case that hits. */
+  tmuxMode?: boolean
 }
 
 /** Where the session should land. */
@@ -49,8 +56,15 @@ export async function createSession(
   options: NewSessionOptions,
   { cwd }: CreateSessionContext
 ): Promise<string | null> {
-  const { claudeMode, dangerousMode, antigravityMode, codexMode, claudeAgentsMode, claudeProfileId } =
-    options
+  const {
+    claudeMode,
+    dangerousMode,
+    antigravityMode,
+    codexMode,
+    claudeAgentsMode,
+    claudeProfileId,
+    tmuxMode
+  } = options
 
   const otherProvider = !!(antigravityMode || codexMode || claudeAgentsMode)
   const effectiveClaudeMode = otherProvider ? false : claudeMode
@@ -70,6 +84,9 @@ export async function createSession(
       codexMode,
       claudeAgentsMode,
       dangerousMode,
+      // Undefined leaves the choice to the global setting, which the spawn
+      // handler resolves.
+      ...(tmuxMode === undefined ? {} : { tmuxMode }),
       ...profileFields
     })
     useSessionStore.getState().addSession({
