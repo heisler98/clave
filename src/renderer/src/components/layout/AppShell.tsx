@@ -23,6 +23,7 @@ import { Bars3BottomLeftIcon, MagnifyingGlassIcon } from '@heroicons/react/24/ou
 import { cn, safePort } from '../../lib/utils'
 import { usePinnedStore } from '../../store/pinned-store'
 import { initMcpDispatcher } from '../../lib/mcp-dispatcher'
+import { initRemoteBridge } from '../../lib/remote-bridge'
 import { initSecretStore } from '../../store/secret-store'
 import { ToolbarSecretPopover } from './ToolbarSecretPopover'
 import { ToolbarUsagePopover } from './ToolbarUsagePopover'
@@ -94,6 +95,9 @@ export function AppShell() {
     mcpDispatcherStarted = true
     initMcpDispatcher()
     initSecretStore()
+    // Same lifecycle: the remote bridge pushes the session model to main for as
+    // long as the process lives, and the latch above keeps it single.
+    initRemoteBridge()
   }, [])
 
   useEffect(() => {

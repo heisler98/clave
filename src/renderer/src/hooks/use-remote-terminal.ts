@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { useSessionStore, type Theme } from '../store/session-store'
 import { safePort } from '../lib/utils'
 import { stripAnsi, detectLocalhostUrl } from '../lib/localhost-url'
+import { matchChord } from '../../../shared/keymap'
 import '@xterm/xterm/css/xterm.css'
 
 function detectPrompt(buffer: string): string | null {
@@ -138,68 +139,23 @@ export function useRemoteTerminal(shellId: string) {
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
 
-    // Custom key bindings — bypass xterm.js local processing, send directly to SSH shell
+    // Custom key bindings — bypass xterm.js local processing, send directly to
+    // the SSH shell. Same chord table as the local PTY path (shared/keymap.ts);
+    // only the transport below differs. macOS Cmd combos are never encoded into
+    // terminal input by the OS, so the readline control bytes in that table are
+    // synthesized the way iTerm and Ghostty do.
+    //
+    // preventDefault() on a match also stops AppShell's window-level shortcuts
+    // from seeing these keys (it bails on e.defaultPrevented). Unmatched keys
+    // must fall through untouched — no preventDefault, return true — so xterm
+    // keeps its own handling.
     terminal.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
-      // Shift+Enter → newline
-      if (e.key === 'Enter' && e.shiftKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\n')
-        return false
-      }
-      // Option+Backspace → word delete backward
-      if (e.key === 'Backspace' && e.altKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x1b\x7f')
-        return false
-      }
-      // Option+Delete → forward word delete
-      if (e.key === 'Delete' && e.altKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x1bd')
-        return false
-      }
-      // Option+Left → word backward
-      if (e.key === 'ArrowLeft' && e.altKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x1bb')
-        return false
-      }
-      // Option+Right → word forward
-      if (e.key === 'ArrowRight' && e.altKey && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x1bf')
-        return false
-      }
-      // macOS Cmd combos are never encoded into terminal input by the OS, so the
-      // readline control bytes are synthesized here the way iTerm and Ghostty do.
-      // preventDefault() also stops AppShell's window-level shortcuts from seeing
-      // these keys (it bails on e.defaultPrevented).
-      // Cmd+Left → start of line (Ctrl-A)
-      if (e.key === 'ArrowLeft' && e.metaKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x01')
-        return false
-      }
-      // Cmd+Right → end of line (Ctrl-E)
-      if (e.key === 'ArrowRight' && e.metaKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x05')
-        return false
-      }
-      // Cmd+Backspace → delete to start of line (Ctrl-U)
-      if (e.key === 'Backspace' && e.metaKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x15')
-        return false
-      }
-      // Cmd+Delete (fn+Delete) → delete to end of line (Ctrl-K)
-      if (e.key === 'Delete' && e.metaKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.electronAPI.sshShellWrite(shellId, '\x0b')
-        return false
-      }
-      return true
+      const chord = matchChord(e)
+      if (!chord) return true
+      e.preventDefault()
+      window.electronAPI.sshShellWrite(shellId, chord.bytes)
+      return false
     })
 
     // Wire terminal input -> SSH shell

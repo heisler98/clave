@@ -6,6 +6,7 @@ import {
   type SessionNameSource
 } from '../pty-manager'
 import { getPreference } from './clave-file-handlers'
+import { notifyGeometry } from '../remote/remote-server'
 import * as titleGenerator from '../title-generator'
 import { startWatching as startAgentStateWatching, clearState as clearAgentState } from '../agent-state-manager'
 import {
@@ -123,6 +124,12 @@ export function registerPtyHandlers(): void {
 
   ipcMain.on('pty:resize', (_event, id: string, cols: number, rows: number) => {
     ptyManager.resize(id, cols, rows)
+    // A remote client mirroring this session sizes its pty to the host's grid,
+    // and tmux clips a client that is narrower than the window rather than
+    // scaling it. So the size the desktop just moved to is exactly what a
+    // mirror has to be told about; `notifyGeometry` drops the repeats a drag
+    // produces and does nothing at all when nobody is connected.
+    notifyGeometry(id, cols, rows)
   })
 
   ipcMain.handle('pty:kill', (_event, id: string) => {

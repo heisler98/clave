@@ -3,6 +3,7 @@ import type {
   MutationResult,
   MutationScope
 } from '../shared/extensions-types'
+import type { RemoteElectronAPI } from '../shared/remote-protocol'
 
 export interface SecretRequestView {
   id: string
@@ -545,6 +546,10 @@ export interface ElectronAPI {
     message?: string
   }) => Promise<{ ok: true } | { ok: false; error: string }>
 }
+
+/** Remote-access control plane. Declared in the shared protocol module so the
+ *  renderer, the main process, and the iOS client cannot drift apart. */
+export interface ElectronAPI extends RemoteElectronAPI {}
 
 declare global {
   interface Window {

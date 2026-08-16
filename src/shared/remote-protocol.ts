@@ -1,0 +1,261 @@
+// ── Clave remote-access protocol ───────────────────────────────────────────
+//
+// The wire contract between a Clave desktop instance (host) and a remote client
+// such as the iPadOS app. See `docs/ipad-remote-client.md` for the design and
+// `docs/p0-findings.md` for the measurements behind it.
+//
+// Two planes:
+//   • CONTROL — this protocol, JSON over a WebSocket bound to 127.0.0.1 and
+//     reached through an SSH `direct-tcpip` forward. Session model + commands.
+//   • DATA    — terminal bytes, carried on separate SSH channels running
+//     `tmux attach-session`. Never travels over this socket.
+//
+// MIRROR RULE: this file is the source of truth for the wire format. The Swift
+// client mirrors it. Any change here must be mirrored in the iOS client in the
+// same change, exactly like the `.clave` enum rule in CLAUDE.md.
+
+/** Bumped on any breaking wire change. Clients refuse mismatched majors. */
+export const REMOTE_PROTOCOL_VERSION = 1
+
+/** Default tmux socket Clave's sessions live on (`pty-manager.ts` TMUX_SOCKET). */
+export const REMOTE_TMUX_SOCKET = 'clave'
+
+// ── Session model ──────────────────────────────────────────────────────────
+
+export type RemoteSessionMode = 'claude' | 'codex' | 'antigravity' | 'claude-agents' | 'terminal'
+
+export type RemoteActivityStatus = 'active' | 'idle'
+
+/**
+ * A session as a remote client sees it. Composed from two sources: the renderer
+ * supplies the UI model (name, group, activity), the main process supplies the
+ * tmux facts (`tmuxName`, `remotable`) that the renderer does not hold.
+ */
+export interface RemoteSession {
+  id: string
+  name: string
+  folderName: string
+  cwd: string
+  mode: RemoteSessionMode
+  groupId: string | null
+  color: string | null
+  alive: boolean
+  activityStatus: RemoteActivityStatus
+  /** Non-null when the session is waiting on the user, e.g. a permission prompt. */
+  promptWaiting: string | null
+  agentState: string | null
+  unseenActivity: boolean
+  detectedUrl: string | null
+  serverStatus: string | null
+  /** The tmux session to attach to, or null when this session is not tmux-backed. */
+  tmuxName: string | null
+  /** False when the client cannot attach; `reason` says why in user-facing words. */
+  remotable: boolean
+  reason?: string
+}
+
+export interface RemoteGroup {
+  id: string
+  name: string
+  cwd: string | null
+  color: string | null
+  sessionIds: string[]
+}
+
+export interface RemotePinnedGroup {
+  id: string
+  name: string
+  cwd: string | null
+  state: string
+}
+
+export interface RemoteSnapshot {
+  sessions: RemoteSession[]
+  groups: RemoteGroup[]
+  pinnedGroups: RemotePinnedGroup[]
+  focusedSessionId: string | null
+}
+
+// ── Attach descriptors ─────────────────────────────────────────────────────
+
+/**
+ * How the client should size its pty when attaching.
+ *
+ * P0-A measured this: a tmux client narrower than the window is CLIPPED to its
+ * own width, so "attach small and render the host's big grid" does not work.
+ *   • mirror   → size the pty to `cols`/`rows` below and scale the font down.
+ *                `ignore-size` then guards the host from a transient mismatch.
+ *   • takeover → size the pty to whatever the client wants; the tmux window
+ *                reflows to follow it.
+ *   • watch    → mirror sizing, read-only.
+ */
+export type RemoteAttachMode = 'mirror' | 'takeover' | 'watch'
+
+export interface RemoteAttachInfo {
+  sessionId: string
+  tmuxName: string
+  socket: string
+  /** Absolute path to the tmux binary as resolved through the login shell. */
+  tmuxPath: string
+  /** Absolute path to Clave's generated tmux config. */
+  configPath: string
+  /** The host window's CURRENT geometry. Mirror clients must match it. */
+  cols: number
+  rows: number
+  /** Client flags for `attach-session -f`, already chosen for the mode. */
+  flags: string[]
+  /** Fully-formed argv, so the client never composes a shell command itself. */
+  argv: string[]
+}
+
+// ── Pairing ────────────────────────────────────────────────────────────────
+
+export type RemoteDeviceStatus = 'approved' | 'pending' | 'revoked'
+
+export interface RemoteDevice {
+  clientId: string
+  deviceName: string
+  status: RemoteDeviceStatus
+  firstSeenAt: number
+  lastSeenAt: number
+  appVersion?: string
+}
+
+// ── Client → server ────────────────────────────────────────────────────────
+
+export type RemoteClientMessage =
+  | {
+      type: 'hello'
+      clientId: string
+      deviceName: string
+      appVersion: string
+      protocol: number
+    }
+  /** `sinceVersion` asks for a delta. The server sends a full snapshot when it
+   *  cannot serve one, which is the normal case after an iOS background/resume. */
+  | { type: 'subscribe'; sinceVersion?: number }
+  | { type: 'command'; id: string; command: RemoteCommand; payload: unknown }
+  | { type: 'attach'; id: string; sessionId: string; mode: RemoteAttachMode }
+  | { type: 'ping' }
+
+/**
+ * Commands map 1:1 onto the renderer's existing MCP dispatcher
+ * (`src/renderer/src/lib/mcp-dispatcher.ts`). No new command layer is written:
+ * this is the single biggest reason the host-service route is cheap.
+ */
+export type RemoteCommand =
+  | 'list'
+  | 'openSession'
+  | 'closeSession'
+  | 'rename'
+  | 'focus'
+  | 'createGroup'
+  | 'moveSession'
+  | 'launchGroup'
+  | 'addGroupTerminal'
+  | 'openFile'
+  | 'notify'
+
+export const REMOTE_COMMANDS: readonly RemoteCommand[] = [
+  'list',
+  'openSession',
+  'closeSession',
+  'rename',
+  'focus',
+  'createGroup',
+  'moveSession',
+  'launchGroup',
+  'addGroupTerminal',
+  'openFile',
+  'notify'
+]
+
+// ── Server → client ────────────────────────────────────────────────────────
+
+export type RemoteEventKind = 'activity' | 'prompt-waiting' | 'exit' | 'notification' | 'geometry'
+
+export type RemoteServerMessage =
+  | {
+      type: 'welcome'
+      hostName: string
+      claveVersion: string
+      protocol: number
+      capabilities: string[]
+      pairing: RemoteDeviceStatus
+    }
+  | { type: 'state'; version: number; snapshot: RemoteSnapshot }
+  | {
+      type: 'patch'
+      version: number
+      sessions?: RemoteSession[]
+      groups?: RemoteGroup[]
+      removedSessionIds?: string[]
+      focusedSessionId?: string | null
+    }
+  | {
+      type: 'event'
+      kind: RemoteEventKind
+      sessionId?: string
+      title?: string
+      body?: string
+      /** Present on `geometry`: the host window resized, mirrors must resync. */
+      cols?: number
+      rows?: number
+    }
+  | { type: 'result'; id: string; ok: boolean; result?: unknown; error?: string }
+  | { type: 'attachInfo'; id: string; ok: boolean; info?: RemoteAttachInfo; error?: string }
+  | { type: 'pong' }
+  | { type: 'error'; error: string }
+
+// ── Main ↔ renderer IPC surface ────────────────────────────────────────────
+//
+// Implemented in `src/main/ipc-handlers/remote-handlers.ts`, exposed on
+// `window.electronAPI` by the preload. Named here so every side codes against
+// one contract.
+
+export const REMOTE_IPC = {
+  /** invoke → RemoteStatus */
+  getStatus: 'remote:get-status',
+  /** invoke(enabled: boolean) → RemoteStatus */
+  setEnabled: 'remote:set-enabled',
+  /** invoke → RemoteDevice[] */
+  listDevices: 'remote:list-devices',
+  /** invoke(clientId: string) → RemoteDevice[] */
+  approveDevice: 'remote:approve-device',
+  /** invoke(clientId: string) → RemoteDevice[] */
+  revokeDevice: 'remote:revoke-device',
+  /** invoke(requireApproval: boolean) → RemoteStatus */
+  setRequireApproval: 'remote:set-require-approval',
+  /** send(snapshot: RemoteSnapshot) — renderer pushes its model on change */
+  pushSnapshot: 'remote:push-snapshot',
+  /** on(devices: RemoteDevice[]) — main tells the renderer the roster changed */
+  devicesUpdated: 'remote:devices-updated'
+} as const
+
+export interface RemoteStatus {
+  /** User preference. When false the server is not listening at all. */
+  enabled: boolean
+  /** True once the WebSocket server is bound. */
+  running: boolean
+  port: number | null
+  requireApproval: boolean
+  deviceCount: number
+  pendingCount: number
+  /** Populated when the server failed to start, for display in Settings. */
+  error?: string
+}
+
+/**
+ * The preload surface. `src/preload/index.d.ts` mixes this into ElectronAPI, so
+ * renderer code gets these typed without importing from main.
+ */
+export interface RemoteElectronAPI {
+  remoteGetStatus(): Promise<RemoteStatus>
+  remoteSetEnabled(enabled: boolean): Promise<RemoteStatus>
+  remoteSetRequireApproval(requireApproval: boolean): Promise<RemoteStatus>
+  remoteListDevices(): Promise<RemoteDevice[]>
+  remoteApproveDevice(clientId: string): Promise<RemoteDevice[]>
+  remoteRevokeDevice(clientId: string): Promise<RemoteDevice[]>
+  remotePushSnapshot(snapshot: RemoteSnapshot): void
+  onRemoteDevicesUpdated(callback: (devices: RemoteDevice[]) => void): () => void
+}

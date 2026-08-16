@@ -27,7 +27,10 @@
     "build:mac:test": "bash scripts/build-mac-local-test.sh",
     "build:mac:local": "bash scripts/build-mac-local.sh",
     "build:linux": "electron-vite build && electron-builder --linux",
-    "release": "bash scripts/release.sh"
+    "release": "bash scripts/release.sh",
+    "export:keymap": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/export-keymap.mjs",
+    "verify:keymap": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-keymap.mjs",
+    "verify:pty": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-pty-replay.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

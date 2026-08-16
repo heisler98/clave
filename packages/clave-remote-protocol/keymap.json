@@ -1,0 +1,152 @@
+{
+  "$comment": "Generated from src/shared/keymap.ts by scripts/export-keymap.mjs. Do not edit by hand — run `npm run export:keymap`.",
+  "version": 1,
+  "source": "src/shared/keymap.ts",
+  "modifierSemantics": {
+    "true": "modifier must be held",
+    "false": "modifier must not be held",
+    "null": "modifier is unconstrained"
+  },
+  "matching": "First chord whose key and modifier constraints all match wins; order is significant.",
+  "chords": [
+    {
+      "id": "shift+Enter",
+      "key": "Enter",
+      "modifiers": {
+        "meta": null,
+        "alt": null,
+        "ctrl": null,
+        "shift": true
+      },
+      "bytes": [
+        10
+      ],
+      "bytesHex": "0a",
+      "description": "Shift+Enter → newline"
+    },
+    {
+      "id": "opt+Backspace",
+      "key": "Backspace",
+      "modifiers": {
+        "meta": false,
+        "alt": true,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        27,
+        127
+      ],
+      "bytesHex": "1b 7f",
+      "description": "Option+Backspace → word delete backward"
+    },
+    {
+      "id": "opt+Delete",
+      "key": "Delete",
+      "modifiers": {
+        "meta": false,
+        "alt": true,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        27,
+        100
+      ],
+      "bytesHex": "1b 64",
+      "description": "Option+Delete → forward word delete"
+    },
+    {
+      "id": "opt+ArrowLeft",
+      "key": "ArrowLeft",
+      "modifiers": {
+        "meta": false,
+        "alt": true,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        27,
+        98
+      ],
+      "bytesHex": "1b 62",
+      "description": "Option+Left → word backward"
+    },
+    {
+      "id": "opt+ArrowRight",
+      "key": "ArrowRight",
+      "modifiers": {
+        "meta": false,
+        "alt": true,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        27,
+        102
+      ],
+      "bytesHex": "1b 66",
+      "description": "Option+Right → word forward"
+    },
+    {
+      "id": "cmd+ArrowLeft",
+      "key": "ArrowLeft",
+      "modifiers": {
+        "meta": true,
+        "alt": false,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        1
+      ],
+      "bytesHex": "01",
+      "description": "Cmd+Left → start of line (Ctrl-A)"
+    },
+    {
+      "id": "cmd+ArrowRight",
+      "key": "ArrowRight",
+      "modifiers": {
+        "meta": true,
+        "alt": false,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        5
+      ],
+      "bytesHex": "05",
+      "description": "Cmd+Right → end of line (Ctrl-E)"
+    },
+    {
+      "id": "cmd+Backspace",
+      "key": "Backspace",
+      "modifiers": {
+        "meta": true,
+        "alt": false,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        21
+      ],
+      "bytesHex": "15",
+      "description": "Cmd+Backspace → delete to start of line (Ctrl-U)"
+    },
+    {
+      "id": "cmd+Delete",
+      "key": "Delete",
+      "modifiers": {
+        "meta": true,
+        "alt": false,
+        "ctrl": false,
+        "shift": null
+      },
+      "bytes": [
+        11
+      ],
+      "bytesHex": "0b",
+      "description": "Cmd+Delete (fn+Delete) → delete to end of line (Ctrl-K)"
+    }
+  ]
+}

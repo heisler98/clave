@@ -1,6 +1,7 @@
 import { useSessionStore, fileTabDedupKey } from '../store/session-store'
 import type { GroupTerminalConfig, Session, SessionGroup } from '../store/session-store'
 import { usePinnedStore, getPinnedState, togglePinnedGroup } from '../store/pinned-store'
+import { buildRemoteSnapshot } from './remote-bridge'
 import type { PinnedGroupSession } from '../store/session-types'
 
 /**
@@ -450,6 +451,10 @@ async function execute(command: string, payload: unknown): Promise<unknown> {
   switch (command) {
     case 'list':
       return handleList(payload as Parameters<typeof handleList>[0])
+    // Remote-access service: main asks for the renderer's session model on
+    // demand (a client connecting between pushes). See `remote-bridge.ts`.
+    case 'remoteSnapshot':
+      return buildRemoteSnapshot()
     case 'createGroup':
       return handleCreateGroup(payload as Parameters<typeof handleCreateGroup>[0])
     case 'openSession':

@@ -8,6 +8,7 @@ import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS, INITIAL_COMMAND_DELAY_MS 
 import { stateFilePath } from './agent-state-manager'
 import { eventFilePath } from './agent-event-manager'
 import { getMcpRuntime, writeSessionMcpConfig, deleteSessionMcpConfig } from './mcp/mcp-runtime'
+import { PtyReplayBuffer } from './pty-replay'
 
 const isWindows = process.platform === 'win32'
 
@@ -175,7 +176,7 @@ export function getLoginShellEnv(): Record<string, string> {
 
 /** Dedicated tmux socket so Clave's sessions never collide with the user's
  *  default tmux server (and a stray `tmux kill-server` can't nuke their work). */
-const TMUX_SOCKET = 'clave'
+export const TMUX_SOCKET = 'clave'
 
 // undefined = not probed yet, null = tmux not installed, string = absolute path
 let tmuxPathCache: string | null | undefined
@@ -185,7 +186,7 @@ let tmuxConfigPathCache: string | null = null
  *  which is usually absent from Electron's process.env.PATH). Uses the already
  *  preloaded login-shell env instead of spawning another `-lic` shell, so it
  *  doesn't block the main thread on the user's rc files. */
-function detectTmux(): string | null {
+export function detectTmux(): string | null {
   if (tmuxPathCache !== undefined) return tmuxPathCache
   if (isWindows) {
     tmuxPathCache = null
@@ -216,7 +217,7 @@ export function isTmuxAvailable(): boolean {
  *  so the user's ~/.tmux.conf can't change behaviour (no surprise keybindings,
  *  no `destroy-unattached on` killing our sessions, no status bar stealing a
  *  row). Truecolor is forwarded and ESC latency dropped for snappy TUIs. */
-function getTmuxConfigPath(): string {
+export function getTmuxConfigPath(): string {
   if (tmuxConfigPathCache) return tmuxConfigPathCache
   const conf = [
     'set -g default-terminal "tmux-256color"',
@@ -346,7 +347,7 @@ export interface AdoptableTmuxSession {
 /** tmux session names we create are always `clave-<sanitized>`. Validate before
  *  using a name in a filesystem path or a kill-session call — it crosses the IPC
  *  boundary on the adoption/discard paths. */
-function isValidTmuxName(name: string): boolean {
+export function isValidTmuxName(name: string): boolean {
   return /^clave-[A-Za-z0-9_-]+$/.test(name)
 }
 
@@ -500,6 +501,9 @@ export interface PtySession {
   pending?: PendingSpawn
   onData?: (data: string) => void
   onExit?: (exitCode: number) => void
+  /** Bounded tail of this session's output, replayed to any terminal that is
+   *  created after the pty is already running. See pty-replay.ts. */
+  replay?: PtyReplayBuffer
 }
 
 class PtyManager {
@@ -753,8 +757,18 @@ class PtyManager {
     const session = this.sessions.get(id)
     if (!session) return
     if (session.ptyProcess) {
-      // Already started — treat as resize.
-      if (session.alive) session.ptyProcess.resize(cols, rows)
+      // The pty is already running, so the caller is a *newly created, empty*
+      // xterm for a session that has been printing for a while — the renderer
+      // only sends pty:start once per terminal instance, before any data can
+      // reach it. Resizing alone can't fill it in: the grid is almost always
+      // the size the pty already has, and a no-op winsize change raises no
+      // SIGWINCH, so tmux and the agent TUIs have no reason to redraw. Without
+      // the replay the tab stays blank behind a blinking cursor until the agent
+      // prints something unprompted, which for an idle session may be never.
+      if (session.alive) {
+        this.replayTo(session)
+        session.ptyProcess.resize(Math.max(1, cols), Math.max(1, rows))
+      }
       return
     }
     if (!session.pending) return
@@ -784,13 +798,35 @@ class PtyManager {
     })
 
     session.ptyProcess = ptyProcess
+    session.replay = new PtyReplayBuffer()
 
-    if (session.onData) {
-      ptyProcess.onData(session.onData)
-    }
+    // node-pty delivers these from a worker thread through a N-API
+    // ThreadSafeFunction, and a JS exception thrown back out of that callback is
+    // rethrown as an uncaught C++ exception — which aborts the whole process,
+    // every other session with it. (Seen for real: a SIGTERM during teardown
+    // left `win.webContents` destroyed while data was still arriving, the send
+    // threw, and Electron died with SIGABRT inside pty.node's CallJS.) Nothing
+    // downstream of a pty read is important enough to take the app down, so the
+    // handoff is wrapped here — at the one boundary node-pty actually calls —
+    // rather than trusting every current and future listener to be total.
+    ptyProcess.onData((data) => {
+      session.replay?.append(data)
+      try {
+        session.onData?.(data)
+      } catch (err) {
+        console.error(`[pty] data handler threw for session ${id}`, err)
+      }
+    })
     ptyProcess.onExit(({ exitCode }) => {
       session.alive = false
-      session.onExit?.(exitCode)
+      // A dead session can't be repainted, and the tab shows "[Session ended]".
+      session.replay?.clear()
+      session.replay = undefined
+      try {
+        session.onExit?.(exitCode)
+      } catch (err) {
+        console.error(`[pty] exit handler threw for session ${id}`, err)
+      }
     })
 
     // For plain-shell mode (no claude/agy), honour an explicit initialCommand.
@@ -800,6 +836,21 @@ class PtyManager {
           session.ptyProcess.write(autoExecute === true ? initialCommand + '\r' : initialCommand)
         }
       }, INITIAL_COMMAND_DELAY_MS)
+    }
+  }
+
+  /** Repaint a freshly created terminal from what the session has already
+   *  printed. Goes out on the session's normal data channel because it *is* the
+   *  session's output — the renderer's activity/prompt heuristics read the
+   *  screen, and they should see the same screen a live attach would have
+   *  produced. */
+  private replayTo(session: PtySession): void {
+    const buffered = session.replay?.read()
+    if (!buffered || !session.onData) return
+    try {
+      session.onData(buffered)
+    } catch (err) {
+      console.error(`[pty] replay failed for session ${session.id}`, err)
     }
   }
 
@@ -848,6 +899,7 @@ class PtyManager {
       if (session.alive && session.ptyProcess) {
         session.ptyProcess.kill()
       }
+      session.replay = undefined
       this.sessions.delete(id)
     }
   }

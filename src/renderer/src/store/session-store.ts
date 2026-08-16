@@ -39,6 +39,10 @@ interface SessionState {
    *  open tabs, create groups, and notify. On by default. Turning it off only
    *  affects sessions spawned afterwards. */
   claveMcpEnabled: boolean
+  /** Serve the session model to remote clients over a loopback WebSocket that
+   *  is reached through an SSH forward. Off by default. This is the UI's mirror
+   *  of the preference; the main process owns the real server state. */
+  remoteAccessEnabled: boolean
   searchQuery: string
   claudeMode: boolean
   antigravityMode: boolean
@@ -108,6 +112,7 @@ interface SessionState {
   setAppIcon: (icon: AppIcon) => void
   setTmuxMode: (enabled: boolean) => void
   setClaveMcpEnabled: (enabled: boolean) => void
+  setRemoteAccessEnabled: (enabled: boolean) => void
   updateSessionAlive: (id: string, alive: boolean) => void
   setSessionActivity: (id: string, status: ActivityStatus) => void
   setAgentState: (id: string, state: import('./session-types').AgentRunState) => void
@@ -313,6 +318,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   appIcon: (localStorage.getItem('clave-app-icon') as AppIcon) || 'dark',
   tmuxMode: localStorage.getItem('clave-tmux-mode') !== 'false',
   claveMcpEnabled: localStorage.getItem('clave-mcp-enabled') !== 'false',
+  remoteAccessEnabled: localStorage.getItem('clave-remote-access') === 'true',
   searchQuery: '',
   claudeMode: true,
   antigravityMode: false,
@@ -817,6 +823,15 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({ claveMcpEnabled })
     // Persist to the main process too: pty:spawn reads this as the default.
     window.electronAPI?.preferencesSet('claveMcpEnabled', claveMcpEnabled)
+  },
+
+  setRemoteAccessEnabled: (remoteAccessEnabled) => {
+    localStorage.setItem('clave-remote-access', String(remoteAccessEnabled))
+    set({ remoteAccessEnabled })
+    // No mirror to the main preferences store on purpose: the remote server
+    // persists its own enabled flag, and Settings drives it through
+    // `remoteSetEnabled`. This value only keeps the toggle rendered correctly
+    // before the first status round-trip comes back.
   },
 
   updateSessionAlive: (id, alive) =>

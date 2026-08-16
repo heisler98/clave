@@ -19,6 +19,7 @@ import {
 } from './mission-control-manager'
 import { cleanupClaveWatchers } from './ipc-handlers/clave-file-handlers'
 import { startMcpServer, stopMcpServer } from './mcp/mcp-server'
+import { startRemoteServer, stopRemoteServer } from './remote/remote-server'
 import { sweepSessionMcpConfigs } from './mcp/mcp-runtime'
 
 function createWindow(): void {
@@ -109,6 +110,11 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   // MCP failure must not break the app — spawns just omit the --mcp-config flag.
   void startMcpServer().catch((err) => console.error('[mcp] failed to start', err))
+  // Remote access is opt-in and off by default; startRemoteServer() returns a
+  // not-running status without binding when the preference is off. Like MCP, a
+  // failure here is non-fatal: the desktop app works, remote clients just
+  // cannot reach it.
+  void startRemoteServer().catch((err) => console.error('[remote] failed to start', err))
   sweepSessionMcpConfigs()
   cleanupDroppedFiles()
   initNotificationManager()
@@ -149,6 +155,7 @@ app.on('before-quit', () => {
   cleanupTelemetry()
   cleanupMissionControl()
   stopMcpServer()
+  stopRemoteServer()
 })
 
 app.on('window-all-closed', () => {

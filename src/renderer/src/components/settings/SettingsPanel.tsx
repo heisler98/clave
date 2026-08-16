@@ -17,6 +17,7 @@ import {
 } from '@heroicons/react/24/outline'
 import type { MicrophoneStatus } from '../../../../preload/index.d'
 import { LocationsTab } from './LocationsTab'
+import { RemoteAccessSection } from './RemoteAccessSection'
 import { UsagePanel } from '../usage/UsagePanel'
 import { SettingsSection, SettingsCard, SettingsRow, ToggleRow } from './primitives'
 import { useSessionDirStore, refreshRecentSessionDirs } from '../../store/session-dir-store'
@@ -160,6 +161,7 @@ function GeneralSettings() {
         <LocationsTab />
         <GitSection />
         <SessionsSection />
+        <RemoteAccessSection />
         <ClaudeProfilesSection />
         <PrivacySection />
       </div>

@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import {
+  REMOTE_IPC,
+  type RemoteDevice,
+  type RemoteSnapshot,
+  type RemoteStatus
+} from '../shared/remote-protocol'
 
 /** Creates a typed IPC event listener with cleanup function. */
 function createIpcListener<T extends unknown[]>(
@@ -377,7 +383,26 @@ const electronAPI = {
   feedbackSubmit: (submission: { email: string; message?: string }) =>
     ipcRenderer.invoke('feedback:submit', submission) as Promise<
       { ok: true } | { ok: false; error: string }
-    >
+    >,
+
+  // ── Remote access ──
+  // Control plane for remote clients (see docs/ipad-remote-client.md). Channel
+  // names live in src/shared/remote-protocol.ts so main, preload, renderer, and
+  // the iOS client all read one contract.
+  remoteGetStatus: () => ipcRenderer.invoke(REMOTE_IPC.getStatus) as Promise<RemoteStatus>,
+  remoteSetEnabled: (enabled: boolean) =>
+    ipcRenderer.invoke(REMOTE_IPC.setEnabled, enabled) as Promise<RemoteStatus>,
+  remoteSetRequireApproval: (requireApproval: boolean) =>
+    ipcRenderer.invoke(REMOTE_IPC.setRequireApproval, requireApproval) as Promise<RemoteStatus>,
+  remoteListDevices: () => ipcRenderer.invoke(REMOTE_IPC.listDevices) as Promise<RemoteDevice[]>,
+  remoteApproveDevice: (clientId: string) =>
+    ipcRenderer.invoke(REMOTE_IPC.approveDevice, clientId) as Promise<RemoteDevice[]>,
+  remoteRevokeDevice: (clientId: string) =>
+    ipcRenderer.invoke(REMOTE_IPC.revokeDevice, clientId) as Promise<RemoteDevice[]>,
+  remotePushSnapshot: (snapshot: RemoteSnapshot) =>
+    ipcRenderer.send(REMOTE_IPC.pushSnapshot, snapshot),
+  onRemoteDevicesUpdated: (callback: (devices: RemoteDevice[]) => void) =>
+    createIpcListener<[RemoteDevice[]]>(REMOTE_IPC.devicesUpdated, callback)
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
