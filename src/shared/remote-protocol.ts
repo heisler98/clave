@@ -58,6 +58,9 @@ export interface RemoteSession {
   /** False when the client cannot attach; `reason` says why in user-facing words. */
   remotable: boolean
   reason?: string
+  /** True when this session can be viewed as a structured chat (a Claude Code
+   *  session whose transcript main can locate). Merged in main, like tmuxName. */
+  chatAvailable: boolean
 }
 
 export interface RemoteGroup {
@@ -126,6 +129,88 @@ export interface RemoteAttachInfo {
   argv: string[]
 }
 
+// ── Chat plane ─────────────────────────────────────────────────────────────
+//
+// A fourth per-session view next to Mirror/Takeover/Watch: a structured chat
+// rendering of a Claude Code session, driven by the session's own transcript
+// (`~/.claude/projects/<encoded-cwd>/<cc-session-id>.jsonl`) tailed in main.
+// Events travel over this control plane, so a chat client needs no tmux data
+// channel at all. Input travels the other way as `chatInput`/`chatKey` and is
+// written into the session's PTY by main.
+//
+// The transcript is Anthropic's internal format with no stability guarantee, so
+// the HOST normalizes entries into the small schema below and the client stays
+// dumb: a CC format change is absorbed here, and an entry main does not
+// recognize crosses the wire as `kind: 'unknown'` so the client can degrade
+// (fall back to Mirror) instead of guessing.
+
+export type RemoteChatRole = 'user' | 'assistant' | 'system'
+
+export type RemoteChatKind = 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'meta' | 'unknown'
+
+/**
+ * One renderable transcript entry. A single JSONL line can produce several
+ * events (an assistant message holds thinking + text + tool_use blocks), so
+ * ids are `<entry-uuid>#<block-index>`.
+ *
+ * Events are ordered as they appear in the transcript; `ts` is display
+ * metadata, not a sort key (some entries carry no timestamp and get 0).
+ */
+export interface RemoteChatEvent {
+  id: string
+  /** Milliseconds since epoch, 0 when the entry carries no timestamp. */
+  ts: number
+  role: RemoteChatRole
+  kind: RemoteChatKind
+  /** The body: message text, thinking excerpt, tool input summary, tool result
+   *  excerpt, or meta line. Truncated host-side; see `truncated`. */
+  text: string
+  truncated?: boolean
+  /** tool_use only. */
+  toolName?: string
+  /** tool_use and tool_result: correlates a result to its call. */
+  toolUseId?: string
+  /** tool_result only. */
+  isError?: boolean
+  /** Assistant events: the model that produced the turn. */
+  model?: string
+}
+
+/**
+ * Keys a chat client may press without composing bytes. The byte sequences
+ * live host-side only (`CHAT_KEY_SEQUENCES` in `chat-manager.ts`), so nothing
+ * byte-shaped needs mirroring into Swift: the client sends the name.
+ *   escape     interrupt the agent
+ *   shift-tab  cycle the permission mode (plan / auto-accept / default)
+ *   tab, enter, up, down, 1..3   drive permission prompts and menus
+ */
+export type RemoteChatKey =
+  | 'escape'
+  | 'shift-tab'
+  | 'tab'
+  | 'enter'
+  | 'up'
+  | 'down'
+  | '1'
+  | '2'
+  | '3'
+
+export const REMOTE_CHAT_KEYS: readonly RemoteChatKey[] = [
+  'escape',
+  'shift-tab',
+  'tab',
+  'enter',
+  'up',
+  'down',
+  '1',
+  '2',
+  '3'
+]
+
+/** Backfill bounds for `chatSubscribe.limit`. */
+export const CHAT_BACKFILL_DEFAULT_LIMIT = 200
+export const CHAT_BACKFILL_MAX_LIMIT = 500
+
 // ── Pairing ────────────────────────────────────────────────────────────────
 
 export type RemoteDeviceStatus = 'approved' | 'pending' | 'revoked'
@@ -154,6 +239,17 @@ export type RemoteClientMessage =
   | { type: 'subscribe'; sinceVersion?: number }
   | { type: 'command'; id: string; command: RemoteCommand; payload: unknown }
   | { type: 'attach'; id: string; sessionId: string; mode: RemoteAttachMode }
+  /** Start receiving chat events for a session. Replied with `chatSnapshot`
+   *  (the backfill); live `chatEvents` follow until `chatUnsubscribe` or the
+   *  socket closes. Subscribing again re-sends a fresh backfill. */
+  | { type: 'chatSubscribe'; id: string; sessionId: string; limit?: number }
+  | { type: 'chatUnsubscribe'; sessionId: string }
+  /** Send a prompt to the session. Main wraps the text in a bracketed paste
+   *  (Claude Code keeps DECSET 2004 on at its prompt) and submits with Enter.
+   *  Replied with a plain `result`. */
+  | { type: 'chatInput'; id: string; sessionId: string; text: string }
+  /** Press one named key (see RemoteChatKey). Replied with a plain `result`. */
+  | { type: 'chatKey'; id: string; sessionId: string; key: RemoteChatKey }
   | { type: 'ping' }
 
 /**
@@ -244,6 +340,24 @@ export type RemoteServerMessage =
     }
   | { type: 'result'; id: string; ok: boolean; result?: unknown; error?: string }
   | { type: 'attachInfo'; id: string; ok: boolean; info?: RemoteAttachInfo; error?: string }
+  /** The chat backfill answering one `chatSubscribe`. `truncatedHistory` means
+   *  older events exist that were not sent. */
+  | {
+      type: 'chatSnapshot'
+      id: string
+      ok: boolean
+      sessionId: string
+      events?: RemoteChatEvent[]
+      truncatedHistory?: boolean
+      error?: string
+    }
+  /** Live transcript events, in transcript order, only to chat subscribers of
+   *  this session. A batch can repeat an id the backfill already sent (the
+   *  subscribe/tail race); clients drop events whose id they already hold. */
+  | { type: 'chatEvents'; sessionId: string; events: RemoteChatEvent[] }
+  /** The session's transcript was re-pointed (a /clear or resume rotated the
+   *  Claude Code session id). The client's log is stale: resubscribe. */
+  | { type: 'chatReset'; sessionId: string }
   | { type: 'pong' }
   | { type: 'error'; error: string }
 

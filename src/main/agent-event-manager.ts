@@ -24,7 +24,9 @@ import { join } from 'path'
  */
 
 /** The subset of the CC hook payload we consume. Field names verified against
- *  the CC binary: the payload uses snake_case `notification_type`. */
+ *  the CC binary: the payload uses snake_case `notification_type`. Every hook
+ *  payload also names the CC session and its transcript file, which is how
+ *  chat-manager follows a session across /clear and resume rotation. */
 export interface AgentNotificationEvent {
   hook_event_name?: string
   notification_type?: string
@@ -32,6 +34,9 @@ export interface AgentNotificationEvent {
   title?: string
   cwd?: string
   session_id?: string
+  transcript_path?: string
+  /** SessionStart only: 'startup' | 'resume' | 'clear' | 'compact'. */
+  source?: string
 }
 
 const SUFFIX = '.jsonl'
@@ -69,6 +74,18 @@ let watcher: FSWatcher | null = null
 const offsets = new Map<string, number>()
 /** Last emitted body + timestamp per session, for the dedupe window. */
 const lastEmit = new Map<string, { body: string; at: number }>()
+/** Secondary consumers of the raw event stream (chat-manager follows
+ *  SessionStart to keep transcript paths current). Called for every drained
+ *  event, before notification filtering. */
+const eventListeners = new Set<(claveSessionId: string, event: AgentNotificationEvent) => void>()
+
+/** Register for every hook event of every session. Returns an unsubscribe. */
+export function onAgentEvent(
+  listener: (claveSessionId: string, event: AgentNotificationEvent) => void
+): () => void {
+  eventListeners.add(listener)
+  return () => eventListeners.delete(listener)
+}
 
 export function getEventDir(): string {
   if (!eventDir) {
@@ -168,6 +185,13 @@ export function startWatching(onNotify: (claveSessionId: string, body: string) =
       if (!claveSessionId) return
 
       for (const event of drain(claveSessionId, join(dir, name))) {
+        for (const listener of eventListeners) {
+          try {
+            listener(claveSessionId, event)
+          } catch {
+            // A listener's failure must not cost the notification below.
+          }
+        }
         const body = notificationBody(event)
         if (!body) continue
         const now = Date.now()

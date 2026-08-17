@@ -75,7 +75,8 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
         serverStatus: s.serverStatus ?? null,
         // Main-side facts. Filled in by the remote server from the pty manager.
         tmuxName: null,
-        remotable: false
+        remotable: false,
+        chatAvailable: false
       }
     })
 

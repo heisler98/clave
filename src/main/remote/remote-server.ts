@@ -3,6 +3,15 @@ import { createHash, timingSafeEqual } from 'crypto'
 import { app } from 'electron'
 import { WebSocket, WebSocketServer } from 'ws'
 import { callRenderer } from '../mcp/mcp-bridge'
+import {
+  chatPressKey,
+  chatSubscribe,
+  chatUnsubscribe,
+  chatWriteInput,
+  isChatAvailable,
+  onChatEvents,
+  onChatReset
+} from '../chat-manager'
 import { buildAttachInfo, getSessionTmuxFacts } from './remote-attach'
 import {
   getDevice,
@@ -15,9 +24,13 @@ import {
   upsertDevice
 } from './remote-state'
 import {
+  CHAT_BACKFILL_DEFAULT_LIMIT,
+  CHAT_BACKFILL_MAX_LIMIT,
+  REMOTE_CHAT_KEYS,
   REMOTE_COMMANDS,
   REMOTE_PROTOCOL_VERSION,
   type RemoteAttachMode,
+  type RemoteChatKey,
   type RemoteClientMessage,
   type RemoteDevice,
   type RemoteDeviceStatus,
@@ -47,7 +60,9 @@ const MAX_PAYLOAD_BYTES = 1024 * 1024 // 1 MB
 
 /** Advertised to the client so it can degrade instead of guessing.
  *  `create` — the server normalizes `openSession` (default cwd, forced tmux)
- *  and the snapshot carries `recentDirs`/`homeDir` to pick a directory from. */
+ *  and the snapshot carries `recentDirs`/`homeDir` to pick a directory from.
+ *  `chat` — the structured chat plane: chatSubscribe/chatEvents over this
+ *  socket, chatInput/chatKey into the session's pty. */
 const CAPABILITIES = [
   'patch',
   'attach',
@@ -56,7 +71,8 @@ const CAPABILITIES = [
   'mirror',
   'takeover',
   'watch',
-  'create'
+  'create',
+  'chat'
 ]
 
 const ATTACH_MODES: readonly RemoteAttachMode[] = ['mirror', 'takeover', 'watch']
@@ -66,6 +82,9 @@ interface ClientState {
   deviceName: string
   /** Set by `subscribe`; unsubscribed sockets get no patches or events. */
   subscribed: boolean
+  /** Sessions this socket receives chatEvents for. Each entry holds one
+   *  chat-manager subscription (refcounted there), released on close. */
+  chatSessions: Set<string>
 }
 
 let wss: WebSocketServer | null = null
@@ -163,7 +182,8 @@ function mergeHostFacts(snapshot: RemoteSnapshot): RemoteSnapshot {
         ...session,
         tmuxName: facts.tmuxName,
         remotable: facts.remotable,
-        reason: facts.reason
+        reason: facts.reason,
+        chatAvailable: isChatAvailable(session.id)
       }
     })
   }
@@ -402,6 +422,138 @@ async function handleCommand(
   }
 }
 
+// ── Chat plane ─────────────────────────────────────────────────────────────
+
+/** Release every chat subscription this socket holds. Clears as it goes, so
+ *  running it twice (an error event followed by close) releases nothing twice. */
+function releaseChatSubscriptions(state: ClientState): void {
+  for (const sessionId of state.chatSessions) chatUnsubscribe(sessionId)
+  state.chatSessions.clear()
+}
+
+/** Registered once: fans live transcript events out to each socket that chat-
+ *  subscribed to that session. Serialized once per broadcast, like `broadcast`. */
+let chatFanoutWired = false
+function wireChatFanout(): void {
+  if (chatFanoutWired) return
+  chatFanoutWired = true
+  onChatEvents((sessionId, events) => {
+    const data = JSON.stringify({ type: 'chatEvents', sessionId, events })
+    for (const [ws, state] of clients) {
+      if (
+        state.chatSessions.has(sessionId) &&
+        !blockedReason(state) &&
+        ws.readyState === WebSocket.OPEN
+      ) {
+        ws.send(data)
+      }
+    }
+  })
+  onChatReset((sessionId) => {
+    const data = JSON.stringify({ type: 'chatReset', sessionId })
+    for (const [ws, state] of clients) {
+      if (
+        state.chatSessions.has(sessionId) &&
+        !blockedReason(state) &&
+        ws.readyState === WebSocket.OPEN
+      ) {
+        ws.send(data)
+      }
+    }
+  })
+}
+
+function handleChatSubscribe(
+  ws: WebSocket,
+  state: ClientState,
+  msg: Extract<RemoteClientMessage, { type: 'chatSubscribe' }>
+): void {
+  const fail = (error: string): void =>
+    send(ws, { type: 'chatSnapshot', id: msg.id, ok: false, sessionId: msg.sessionId, error })
+  const blocked = blockedReason(state)
+  if (blocked) {
+    fail(blocked)
+    return
+  }
+  if (typeof msg.sessionId !== 'string' || !msg.sessionId) {
+    fail('chatSubscribe needs a sessionId.')
+    return
+  }
+  const limit =
+    typeof msg.limit === 'number' && Number.isFinite(msg.limit)
+      ? Math.max(1, Math.min(CHAT_BACKFILL_MAX_LIMIT, Math.floor(msg.limit)))
+      : CHAT_BACKFILL_DEFAULT_LIMIT
+  try {
+    // A resubscribe (the client's answer to chatReset) replaces the old
+    // subscription instead of stacking a second refcount.
+    if (state.chatSessions.has(msg.sessionId)) chatUnsubscribe(msg.sessionId)
+    const backfill = chatSubscribe(msg.sessionId, limit)
+    state.chatSessions.add(msg.sessionId)
+    send(ws, {
+      type: 'chatSnapshot',
+      id: msg.id,
+      ok: true,
+      sessionId: msg.sessionId,
+      events: backfill.events,
+      truncatedHistory: backfill.truncatedHistory
+    })
+  } catch (err) {
+    state.chatSessions.delete(msg.sessionId)
+    fail(err instanceof Error ? err.message : String(err))
+  }
+}
+
+function handleChatInput(
+  ws: WebSocket,
+  state: ClientState,
+  msg: Extract<RemoteClientMessage, { type: 'chatInput' }>
+): void {
+  const blocked = blockedReason(state)
+  if (blocked) {
+    send(ws, { type: 'result', id: msg.id, ok: false, error: blocked })
+    return
+  }
+  try {
+    chatWriteInput(msg.sessionId, typeof msg.text === 'string' ? msg.text : '')
+    send(ws, { type: 'result', id: msg.id, ok: true, result: { ok: true } })
+  } catch (err) {
+    send(ws, {
+      type: 'result',
+      id: msg.id,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+function handleChatKey(
+  ws: WebSocket,
+  state: ClientState,
+  msg: Extract<RemoteClientMessage, { type: 'chatKey' }>
+): void {
+  const blocked = blockedReason(state)
+  if (blocked) {
+    send(ws, { type: 'result', id: msg.id, ok: false, error: blocked })
+    return
+  }
+  // Allowlist before anything reaches a pty: `key` is whatever the peer typed.
+  if (!(REMOTE_CHAT_KEYS as readonly string[]).includes(msg.key)) {
+    send(ws, { type: 'result', id: msg.id, ok: false, error: `Unknown key "${msg.key}".` })
+    return
+  }
+  try {
+    chatPressKey(msg.sessionId, msg.key as RemoteChatKey)
+    send(ws, { type: 'result', id: msg.id, ok: true, result: { ok: true } })
+  } catch (err) {
+    send(ws, {
+      type: 'result',
+      id: msg.id,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
 function handleAttach(
   ws: WebSocket,
   state: ClientState,
@@ -451,6 +603,18 @@ function handleMessage(ws: WebSocket, state: ClientState, raw: string): void {
       break
     case 'attach':
       handleAttach(ws, state, msg)
+      break
+    case 'chatSubscribe':
+      handleChatSubscribe(ws, state, msg)
+      break
+    case 'chatUnsubscribe':
+      if (state.chatSessions.delete(msg.sessionId)) chatUnsubscribe(msg.sessionId)
+      break
+    case 'chatInput':
+      handleChatInput(ws, state, msg)
+      break
+    case 'chatKey':
+      handleChatKey(ws, state, msg)
       break
     case 'ping':
       send(ws, { type: 'pong' })
@@ -549,6 +713,7 @@ export async function startRemoteServer(): Promise<RemoteStatus> {
   saveRemoteServerState(boundPort, token)
   // Named listener, so repeated starts do not stack duplicates on the Set.
   onDevicesChanged(handleDevicesChanged)
+  wireChatFanout()
 
   wss.on('connection', (ws, req) => {
     // A browser cannot set an Authorization header on a WebSocket, so the token
@@ -563,14 +728,21 @@ export async function startRemoteServer(): Promise<RemoteStatus> {
       return
     }
 
-    const state: ClientState = { clientId: null, deviceName: 'Unknown device', subscribed: false }
+    const state: ClientState = {
+      clientId: null,
+      deviceName: 'Unknown device',
+      subscribed: false,
+      chatSessions: new Set()
+    }
     clients.set(ws, state)
 
     ws.on('message', (data) => handleMessage(ws, state, data.toString()))
     ws.on('close', () => {
+      releaseChatSubscriptions(state)
       clients.delete(ws)
     })
     ws.on('error', () => {
+      releaseChatSubscriptions(state)
       clients.delete(ws)
     })
   })
@@ -583,7 +755,10 @@ export async function startRemoteServer(): Promise<RemoteStatus> {
 }
 
 export function stopRemoteServer(): void {
-  for (const ws of clients.keys()) ws.close(1001, 'Remote access turned off')
+  for (const [ws, state] of clients) {
+    releaseChatSubscriptions(state)
+    ws.close(1001, 'Remote access turned off')
+  }
   clients.clear()
   wss?.close()
   wss = null

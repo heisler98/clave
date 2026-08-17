@@ -20,6 +20,7 @@ import {
 import { cleanupClaveWatchers } from './ipc-handlers/clave-file-handlers'
 import { startMcpServer, stopMcpServer } from './mcp/mcp-server'
 import { startRemoteServer, stopRemoteServer } from './remote/remote-server'
+import { initChatManager } from './chat-manager'
 import { sweepSessionMcpConfigs } from './mcp/mcp-runtime'
 
 function createWindow(): void {
@@ -108,6 +109,10 @@ app.whenReady().then(() => {
   })
 
   registerIpcHandlers()
+  // Track Claude Code transcript locations from session hooks even while remote
+  // access is off, so a later chat subscriber finds sessions that /clear'd or
+  // resumed before the toggle was flipped.
+  initChatManager()
   // MCP failure must not break the app — spawns just omit the --mcp-config flag.
   void startMcpServer().catch((err) => console.error('[mcp] failed to start', err))
   // Remote access is opt-in and off by default; startRemoteServer() returns a

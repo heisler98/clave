@@ -66,7 +66,18 @@ function buildClaudeHookSettingsArg(claveSessionId: string): string | null {
   })
   const settings = {
     hooks: {
-      SessionStart: [write('idle')],
+      // SessionStart also archives its payload: it names the CC session id and
+      // transcript path, and it fires again with fresh values when /clear or a
+      // resume rotates them. chat-manager tails the transcript and this is how
+      // it follows the file. (Notification payloads land in the same log below.)
+      SessionStart: [
+        {
+          hooks: [
+            { type: 'command', command: `mkdir -p ${qDir} && printf idle > ${q}` },
+            { type: 'command', command: `mkdir -p ${qEventsDir} && cat >> ${qEvents} || true` }
+          ]
+        }
+      ],
       UserPromptSubmit: [write('working')],
       PreToolUse: [write('working')],
       PostToolUse: [write('working')],

@@ -219,6 +219,10 @@ Mirror mode is more viable than it sounds. An 11-inch iPad in landscape is about
 9pt SF Mono (~5.4pt advance) that is roughly 215 columns, comfortably above the 120-180 a Clave
 pane typically runs. Portrait is where scaling earns its keep.
 
+A fourth per-session view, **Chat**, sits beside these three for Claude Code sessions. It is not a
+tmux attach mode at all — it opens no terminal channel and rides the control plane both ways — so
+it lives outside this table; see §8f.
+
 **Resync is mandatory, not an optimisation.** When the desktop resizes, a Mirror client at the old
 size is silently clipped until it follows (measured: B-run truncated from 100 to 82 chars). The
 host service must push geometry changes over the control plane and the client must re-issue
@@ -757,6 +761,73 @@ excerpt. If it recurs, one screenshot will name it.
 single fast happy path. The permanent fixture added here (`ChunkedForwardedChannel`) delivers bytes
 in adversarial chunks and lets a scripted host answer before the caller is ready. That is the shape
 of test this project needed from the start.
+
+---
+
+## 8f. Chat mode, as built
+
+A fourth per-session view next to Mirror/Takeover/Watch: a structured chat rendering of a Claude
+Code session, driven by the session's own transcript instead of PTY bytes. On cellular this is the
+difference between a tool call arriving as one ~300-byte JSON event and arriving as a screenful of
+ANSI. Shipped across both repos in one change, per the mirror rule.
+
+**Where the events come from.** Clave already launches every Claude session with `--session-id`, so
+main knows the CC session UUID, and the transcript lives at
+`~/.claude/projects/<cwd with [/.]→->/<uuid>.jsonl`. But that id ROTATES on `/clear` and `--resume`,
+and nothing in Clave updated it afterwards (the sidecar goes stale; `session-export-handlers.ts`
+documents the cascade it grew to cope). So the SessionStart hook now archives its payload into the
+same per-session event log the Notification hook uses (`buildClaudeHookSettingsArg`), and
+`chat-manager.ts` records the payload's `transcript_path` as a persisted override
+(`<userData>/chat-transcripts.json`), because the agents outlive the app inside tmux. Resolution
+order: hook-reported path first, id-anchored derivation second, and never mtime guessing — with
+parallel sessions in one project, "newest file" is how you tail a sibling's conversation.
+
+**Host side** (`src/main/`):
+
+- `chat-transcript.ts` — pure normalization of transcript lines into the small wire schema
+  (`RemoteChatEvent`): user/assistant text, thinking, `tool_use` + `tool_result` (correlated by id),
+  meta lines, with per-kind body caps (a 3 MB base64 image inside a tool result is exactly what
+  chat mode exists to avoid; images cross as `[image]`). Sidechain (subagent) traffic is filtered.
+  Entry types we know and skip are an explicit list, so a genuinely NEW type crosses the wire as
+  `kind: 'unknown'` — the client's cue that the schema drifted and Mirror is the honest fallback.
+  Locked by `npm run verify:chat` (the `verify-keymap`/`verify-pty` house pattern).
+- `chat-manager.ts` — the tailers (byte-offset incremental reads, partial-line carry, fs.watch plus
+  a poll net, 2 MB bounded backfill ending on a whole line), the override persistence, refcounted
+  subscriptions, and the input path: `chatInput` wraps the text in a bracketed paste and submits
+  with Enter **as a separate write 150 ms later** — measured: an Enter in the same write as the
+  paste races the TUI's render loop and sometimes leaves the text sitting unsubmitted in the
+  composer. `chatKey` is a host-side name→bytes allowlist (escape, shift-tab, tab, enter, arrows,
+  1-3), so no byte table needed mirroring into Swift.
+- `remote-server.ts` — four new client messages (`chatSubscribe`/`chatUnsubscribe`/`chatInput`/
+  `chatKey`), three new server messages (`chatSnapshot`/`chatEvents`/`chatReset`), the `chat`
+  capability, per-socket subscription sets released on close, and a `chatAvailable` fact merged
+  into every session like `tmuxName`. Old clients never chat-subscribe so they never see a chat
+  message; old hosts lack the capability so the client never shows the option. Protocol stays v1.
+
+**When the transcript rotates** (`/clear`, resume): the SessionStart hook fires with the new path,
+the tailer re-points, and subscribers get `chatReset` — resubscribe for a coherent backfill. The
+same replace-over-merge rule as the session model, for the same reason.
+
+**iPad side**: `SessionViewMode` (mirror/takeover/watch/chat) replaces the per-session
+`RemoteAttachMode` in the shell — chat is deliberately NOT a wire attach mode, because it opens no
+tmux channel at all (switching to chat detaches the terminal channel; switching back re-attaches).
+`ChatSessionModel` in ClaveKit folds events into rows (results into their calls, dedupe by id
+because a live batch can legitimately repeat the backfill's tail), `ChatPane` renders them with a
+composer, Esc/Mode quick keys, prompt-answer keys while `promptWaiting`, a drift banner offering
+Mirror when unknown events appear, and a `ChatPhase` so an empty log can say whether it is loading,
+live, or refused (the `SessionAttachPhase` lesson, reapplied). Chat subscriptions die with the
+socket, so the runtime resubscribes every chat-viewed session when the link comes back.
+
+**Verified end to end** (scratchpad `chat-e2e.mjs`, 19/19 against the real built app and a REAL
+`claude` session): capability advertised; unknown-session and plain-terminal subscribes refused
+with reasons; `chatAvailable` facts correct both ways; the SessionStart hook recording the
+override; a prompt sent over the control plane coming back from the tail as a user event and then
+the model's actual reply as an assistant event; `/clear` producing `chatReset` and a fresh
+backfill without the old exchange; no tmux sessions leaked. The wire fixtures those runs produced
+are checked into the iOS repo (`Fixtures/wire-messages.jsonl`), so the Swift decoder is tested
+against bytes the host actually sent — 179 tests, 0 failures, simulator and device builds green.
+
+Still needs on-device UAT: the chat pane's keyboard/scroll feel, and a real cellular round trip.
 
 ---
 

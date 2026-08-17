@@ -14,6 +14,7 @@ import {
   clearEvents as clearAgentEvents
 } from '../agent-event-manager'
 import { showSessionNotification } from '../notification-manager'
+import { clearChatSession } from '../chat-manager'
 
 export function registerPtyHandlers(): void {
   // Buffer PTY input per session to detect /clear command
@@ -71,6 +72,7 @@ export function registerPtyHandlers(): void {
         inputBuffers.delete(session.id)
         clearAgentState(session.id)
         clearAgentEvents(session.id)
+        clearChatSession(session.id)
         if (win && !win.isDestroyed()) {
           win.webContents.send(`pty:exit:${session.id}`, exitCode)
         }
