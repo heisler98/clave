@@ -3,7 +3,8 @@ import {
   useSessionStore,
   GROUP_TERMINAL_COLORS,
   resolveColorHex,
-  type GroupTerminalColor
+  type GroupTerminalColor,
+  type Session
 } from '../../store/session-store'
 import ColorPicker from '../ui/ColorPicker'
 import { SessionItem } from '../session/SessionItem'
@@ -571,18 +572,30 @@ export function Sidebar() {
           initialCommand: command || undefined,
           autoExecute: command ? commandMode === 'auto' : false
         })
-        const newSession = {
+        // A complete Session, not addSession(): that would file the terminal
+        // into whichever group holds the current selection, and a toolbar
+        // terminal is tracked through its terminal config instead.
+        const newSession: Session = {
           id: sessionInfo.id,
           cwd: sessionInfo.cwd,
           folderName: sessionInfo.folderName,
           name: sessionInfo.folderName,
+          nameSource: 'auto',
           alive: sessionInfo.alive,
-          activityStatus: 'idle' as const,
+          activityStatus: 'idle',
           promptWaiting: null,
           claudeMode: false,
+          antigravityMode: false,
+          codexMode: false,
+          claudeAgentsMode: false,
           dangerousMode: false,
           claudeSessionId: sessionInfo.claudeSessionId,
-          sessionType: 'local' as const
+          sessionType: 'local',
+          detectedUrl: null,
+          serverStatus: null,
+          serverCommand: null,
+          hasUnseenActivity: false,
+          planFilePath: null
         }
 
         const currentState = useSessionStore.getState()

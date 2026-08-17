@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { StoreApi, UseBoundStore } from 'zustand'
 import type {
   Theme,
   AppIcon,
@@ -20,6 +21,28 @@ import type { Agent, AgentStatus } from '../../../shared/remote-types'
 // Re-export types and constants so existing imports continue to work
 export type { Theme, AppIcon, ActivityStatus, GroupTerminalConfig, GroupTerminalColor, GroupTerminalIcon, Session, SessionGroup, FileTab, ActiveView, SettingsSection, ExtensionsSection, SessionType, SessionNameSource }
 export { GROUP_TERMINAL_COLORS, GROUP_TERMINAL_ICONS, TERMINAL_COLOR_VALUES, resolveColorHex } from './session-types'
+
+/** Fields `addSession` fills in itself when a caller omits them. */
+type DefaultedSessionField =
+  | 'antigravityMode'
+  | 'codexMode'
+  | 'detectedUrl'
+  | 'serverStatus'
+  | 'serverCommand'
+  | 'hasUnseenActivity'
+  | 'nameSource'
+  | 'planFilePath'
+
+/**
+ * What a caller must supply to add a session. Everything in
+ * `DefaultedSessionField` is normalized by `addSession`, so call sites only
+ * spell out what they actually know. `name` is also normalized: an empty or
+ * missing name falls back to `folderName`, because the remote-access wire
+ * requires every session to carry a name (`JSON.stringify` drops undefined
+ * keys, and the iPad client hard-fails on a session without one).
+ */
+export type NewSessionInput = Omit<Session, DefaultedSessionField | 'name'> &
+  Partial<Pick<Session, DefaultedSessionField>> & { name?: string }
 
 interface SessionState {
   sessions: Session[]
@@ -76,7 +99,7 @@ interface SessionState {
   generatingCommitCwds: Set<string>
   hiddenAgentIds: Set<string>
   sidebarUndoStack: SidebarSnapshot[]
-  addSession: (session: Session) => void
+  addSession: (session: NewSessionInput) => void
   removeSession: (id: string) => void
   resetSessions: () => Promise<void>
   /** Rebuild groups + display order from a persisted layout after tmux-backed
@@ -96,7 +119,7 @@ interface SessionState {
   toggleGroupCollapsed: (groupId: string) => void
   addGroupTerminal: (groupId: string, config: Omit<GroupTerminalConfig, 'sessionId'>) => void
   removeGroupTerminal: (groupId: string, terminalId: string) => void
-  updateGroupTerminal: (groupId: string, terminalId: string, updates: Partial<Pick<GroupTerminalConfig, 'command' | 'commandMode' | 'color' | 'icon'>>) => void
+  updateGroupTerminal: (groupId: string, terminalId: string, updates: Partial<Pick<GroupTerminalConfig, 'command' | 'commandMode' | 'color' | 'icon' | 'cwd'>>) => void
   setGroupTerminalSessionId: (groupId: string, terminalId: string, sessionId: string | null) => void
   setGroupCwd: (groupId: string, cwd: string) => void
   setGroupColor: (groupId: string, color: GroupTerminalColor | null) => void
@@ -305,7 +328,12 @@ export function fileTabDedupKey(tab: FileTab): string {
   return `file:${tab.filePath}`
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+// The explicit annotation matters: actions inside the store read
+// `useSessionStore.getState()`, and with `noImplicitAny` off that circularity
+// silently typed the whole store as `any` — every `addSession` call site
+// compiled unchecked, which is how sessions with `name: undefined` reached the
+// remote-access wire and broke the iPad client's decoder.
+export const useSessionStore: UseBoundStore<StoreApi<SessionState>> = create<SessionState>((set) => ({
   sessions: [],
   fileTabs: [],
   focusedSessionId: null,
@@ -356,7 +384,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   sidebarUndoStack: [] as SidebarSnapshot[],
   addSession: (session) =>
     set((state) => {
-      const newSession = { ...session, antigravityMode: session.antigravityMode ?? false, codexMode: session.codexMode ?? false, claudeAgentsMode: session.claudeAgentsMode ?? false, detectedUrl: session.detectedUrl ?? null, serverStatus: session.serverStatus ?? null, serverCommand: session.serverCommand ?? null, hasUnseenActivity: session.hasUnseenActivity ?? false, nameSource: session.nameSource ?? 'auto', planFilePath: session.planFilePath ?? null }
+      const newSession: Session = { ...session, name: session.name || session.folderName, antigravityMode: session.antigravityMode ?? false, codexMode: session.codexMode ?? false, claudeAgentsMode: session.claudeAgentsMode ?? false, detectedUrl: session.detectedUrl ?? null, serverStatus: session.serverStatus ?? null, serverCommand: session.serverCommand ?? null, hasUnseenActivity: session.hasUnseenActivity ?? false, nameSource: session.nameSource ?? 'auto', planFilePath: session.planFilePath ?? null }
 
       // Check if selected sessions all belong to a single group
       const selectedIds = state.selectedSessionIds

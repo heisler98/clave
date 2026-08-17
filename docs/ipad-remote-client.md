@@ -566,6 +566,13 @@ Deviations from the plan above, and why:
   re-pair by reconnecting under a new device name.
 - **`patch` carries no `pinnedGroups`**, so a pinned-group change forces a full `state`. Pinned
   groups change rarely, so this was left alone rather than widening the contract.
+- **Session creation from the client (added 2026-08).** The snapshot carries `recentDirs` (the
+  Mac's Cmd+N MRU, renderer-supplied) and `homeDir` (merged in main, like the tmux facts) so a
+  client can offer real directories; both force a full `state` on change, same as `pinnedGroups`.
+  `openSession` is the one command the server normalizes instead of forwarding verbatim: a missing
+  `cwd` falls back to the MRU head and then the home directory, and `tmuxMode` is forced on so the
+  session the client creates is attachable by the client that asked for it. Advertised as the
+  `create` capability.
 - **`buildAttachInfo` reads geometry with `execFileSync`.** The CLAUDE.md hazard is `execSync`
   routing through `/bin/sh` and pre-expanding `$PATH`; this passes argv directly with no shell, to a
   `tmuxPath` already resolved through the login shell, with a 2s timeout and a geometry fallback.

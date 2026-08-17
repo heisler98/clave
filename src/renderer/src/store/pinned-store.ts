@@ -584,7 +584,9 @@ async function spawnPinnedGroup(
         id: sessionInfo.id,
         cwd: sessionInfo.cwd,
         folderName: sessionInfo.folderName,
-        name: session.name,
+        // `.clave` files are parsed, not typed: a session block with no name
+        // reaches here as undefined and must fall back to the folder.
+        name: session.name || sessionInfo.folderName,
         alive: sessionInfo.alive,
         activityStatus: 'idle',
         promptWaiting: null,
@@ -603,8 +605,9 @@ async function spawnPinnedGroup(
 
       // A `.clave`/pin name is a slot label, so it is recorded as a preset: the
       // tab shows it right away, and the auto-title generator may still replace
-      // it once the agent produces a real title.
-      if (session.name !== sessionInfo.folderName) {
+      // it once the agent produces a real title. A missing name is not a
+      // preset — the tab already fell back to the folder name above.
+      if (session.name && session.name !== sessionInfo.folderName) {
         useSessionStore.getState().presetSessionName(sessionInfo.id, session.name)
       }
 

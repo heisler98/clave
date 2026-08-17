@@ -1,6 +1,7 @@
 import { useSessionStore } from '../store/session-store'
 import type { Session, SessionGroup } from '../store/session-store'
 import { usePinnedStore, getPinnedState } from '../store/pinned-store'
+import { useSessionDirStore, refreshRecentSessionDirs } from '../store/session-dir-store'
 import type {
   RemoteGroup,
   RemotePinnedGroup,
@@ -46,27 +47,32 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
 
   // Local sessions only, same as handleList: OpenClaw-backed remote sessions
   // live on another machine and have no tmux session here to attach to.
+  // Every field is coerced to the wire contract here, whatever the store holds.
+  // `JSON.stringify` silently drops undefined keys, and the Swift client's
+  // decoder hard-fails on a session missing a required field — which it reports
+  // as a protocol mismatch, taking the whole snapshot down with it. One
+  // malformed store entry must never cost the client its session list.
   const sessions: RemoteSession[] = state.sessions
     .filter((s) => s.sessionType === 'local')
     .map((s) => {
       const group = groupOfSession(state.groups, s.id)
       return {
         id: s.id,
-        name: s.name,
-        folderName: s.folderName,
-        cwd: s.cwd,
+        name: s.name || s.folderName || '',
+        folderName: s.folderName ?? '',
+        cwd: s.cwd ?? '',
         mode: remoteSessionMode(s),
         groupId: group?.id ?? null,
         color: group?.color ?? null,
-        alive: s.alive,
+        alive: s.alive !== false,
         // The wire has two activity states; a session that ended is reported
         // through `alive` instead.
         activityStatus: s.activityStatus === 'active' ? 'active' : 'idle',
-        promptWaiting: s.promptWaiting,
+        promptWaiting: s.promptWaiting ?? null,
         agentState: s.agentState ?? null,
-        unseenActivity: s.hasUnseenActivity,
-        detectedUrl: s.detectedUrl,
-        serverStatus: s.serverStatus,
+        unseenActivity: s.hasUnseenActivity === true,
+        detectedUrl: s.detectedUrl ?? null,
+        serverStatus: s.serverStatus ?? null,
         // Main-side facts. Filled in by the remote server from the pty manager.
         tmuxName: null,
         remotable: false
@@ -75,10 +81,10 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
 
   const groups: RemoteGroup[] = state.groups.map((g) => ({
     id: g.id,
-    name: g.name,
-    cwd: g.cwd,
+    name: g.name ?? '',
+    cwd: g.cwd ?? null,
     color: g.color ?? null,
-    sessionIds: g.sessionIds
+    sessionIds: g.sessionIds ?? []
   }))
 
   // Launchable templates from `.clave` files, so a remote client can start a
@@ -90,7 +96,19 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
     state: getPinnedState(pg)
   }))
 
-  return { sessions, groups, pinnedGroups, focusedSessionId: state.focusedSessionId }
+  return {
+    sessions,
+    groups,
+    pinnedGroups,
+    focusedSessionId: state.focusedSessionId,
+    // Where a remote client can start a new session. Empty until the MRU
+    // preference loads; `initRemoteBridge` kicks that load off and the store
+    // subscription pushes again when it lands.
+    recentDirs: useSessionDirStore.getState().recentDirs,
+    // Main-side fact, same as tmuxName: the renderer has no `os`, so the
+    // remote server overwrites this before a client sees it.
+    homeDir: ''
+  }
 }
 
 /**
@@ -126,6 +144,9 @@ export function initRemoteBridge(): () => void {
   // Seed main with the current model, so a client connecting before the first
   // store write still gets a session list.
   schedule()
+  // Load (and prune) the new-session MRU so snapshots carry real directories.
+  // The store write it causes lands in the subscription below.
+  refreshRecentSessionDirs()
 
   const unsubSessions = useSessionStore.subscribe((state, prevState) => {
     if (
@@ -143,9 +164,15 @@ export function initRemoteBridge(): () => void {
     schedule()
   })
 
+  const unsubDirs = useSessionDirStore.subscribe((state, prevState) => {
+    if (state.recentDirs === prevState.recentDirs) return
+    schedule()
+  })
+
   return () => {
     if (timer !== null) clearTimeout(timer)
     unsubSessions()
     unsubPinned()
+    unsubDirs()
   }
 }

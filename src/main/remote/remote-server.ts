@@ -45,8 +45,19 @@ import {
 /** Reject frames larger than this to bound memory pressure from a hostile peer. */
 const MAX_PAYLOAD_BYTES = 1024 * 1024 // 1 MB
 
-/** Advertised to the client so it can degrade instead of guessing. */
-const CAPABILITIES = ['patch', 'attach', 'commands', 'geometry', 'mirror', 'takeover', 'watch']
+/** Advertised to the client so it can degrade instead of guessing.
+ *  `create` — the server normalizes `openSession` (default cwd, forced tmux)
+ *  and the snapshot carries `recentDirs`/`homeDir` to pick a directory from. */
+const CAPABILITIES = [
+  'patch',
+  'attach',
+  'commands',
+  'geometry',
+  'mirror',
+  'takeover',
+  'watch',
+  'create'
+]
 
 const ATTACH_MODES: readonly RemoteAttachMode[] = ['mirror', 'takeover', 'watch']
 
@@ -139,11 +150,13 @@ function sameGroups(a: RemoteGroup[], b: RemoteGroup[]): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-/** The renderer holds the UI model; tmux names and attachability live only in
- *  main. Compose both here so a client sees one coherent session. */
-function mergeTmuxFacts(snapshot: RemoteSnapshot): RemoteSnapshot {
+/** The renderer holds the UI model; tmux names, attachability, and the home
+ *  directory live only in main. Compose both here so a client sees one
+ *  coherent snapshot. */
+function mergeHostFacts(snapshot: RemoteSnapshot): RemoteSnapshot {
   return {
     ...snapshot,
+    homeDir: os.homedir(),
     sessions: snapshot.sessions.map((session) => {
       const facts = getSessionTmuxFacts(session.id)
       return {
@@ -162,7 +175,7 @@ function mergeTmuxFacts(snapshot: RemoteSnapshot): RemoteSnapshot {
  * nothing costs a version bump of zero and sends nothing at all.
  */
 export function pushSnapshot(snapshot: RemoteSnapshot): void {
-  const next = mergeTmuxFacts(snapshot)
+  const next = mergeHostFacts(snapshot)
   const prev = cachedSnapshot
   cachedSnapshot = next
 
@@ -178,10 +191,13 @@ export function pushSnapshot(snapshot: RemoteSnapshot): void {
   const removedSessionIds = prev.sessions.map((s) => s.id).filter((id) => !nextIds.has(id))
   const groupsChanged = !sameGroups(prev.groups, next.groups)
   const focusChanged = prev.focusedSessionId !== next.focusedSessionId
-  // `patch` carries no pinnedGroups field, so a pinned-group change can only be
-  // expressed as a full state. Rare enough that a dedicated field is not worth
-  // a protocol version.
+  // `patch` carries no pinnedGroups, recentDirs, or homeDir fields, so a
+  // change to any of them can only be expressed as a full state. Rare enough
+  // that dedicated fields are not worth a protocol version.
   const pinnedChanged = JSON.stringify(prev.pinnedGroups) !== JSON.stringify(next.pinnedGroups)
+  const dirsChanged =
+    prev.homeDir !== next.homeDir ||
+    JSON.stringify(prev.recentDirs) !== JSON.stringify(next.recentDirs)
 
   for (const id of removedSessionIds) lastGeometry.delete(id)
 
@@ -190,14 +206,15 @@ export function pushSnapshot(snapshot: RemoteSnapshot): void {
     removedSessionIds.length === 0 &&
     !groupsChanged &&
     !focusChanged &&
-    !pinnedChanged
+    !pinnedChanged &&
+    !dirsChanged
   ) {
     return
   }
 
   stateVersion += 1
   const state: RemoteServerMessage = { type: 'state', version: stateVersion, snapshot: next }
-  if (pinnedChanged) {
+  if (pinnedChanged || dirsChanged) {
     broadcast(state)
     return
   }
@@ -357,8 +374,23 @@ async function handleCommand(
     send(ws, { type: 'result', id: msg.id, ok: false, error: `Unknown command "${msg.command}".` })
     return
   }
+  // `openSession` is normalized rather than forwarded verbatim — the one
+  // exception to the 1:1 dispatcher rule (documented on `RemoteCommand`):
+  //   • cwd defaults to the MRU head, then the home directory, so an empty
+  //     payload is the client's one-tap "new terminal";
+  //   • tmuxMode is forced on, whatever the Mac's global setting says, because
+  //     a session this client creates and then cannot attach to is useless.
+  let payload = msg.payload
+  if (msg.command === 'openSession') {
+    const base = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
+    const cwd =
+      typeof base.cwd === 'string' && base.cwd
+        ? base.cwd
+        : (cachedSnapshot?.recentDirs[0] ?? os.homedir())
+    payload = { ...base, cwd, tmuxMode: true }
+  }
   try {
-    const result = await callRenderer<unknown>(msg.command, msg.payload)
+    const result = await callRenderer<unknown>(msg.command, payload)
     send(ws, { type: 'result', id: msg.id, ok: true, result: result ?? { ok: true } })
   } catch (err) {
     send(ws, {

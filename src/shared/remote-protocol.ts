@@ -30,6 +30,12 @@ export type RemoteActivityStatus = 'active' | 'idle'
  * A session as a remote client sees it. Composed from two sources: the renderer
  * supplies the UI model (name, group, activity), the main process supplies the
  * tmux facts (`tmuxName`, `remotable`) that the renderer does not hold.
+ *
+ * EVERY field must actually be present on the wire: `JSON.stringify` silently
+ * drops undefined values, and iOS clients before 2026-08 hard-fail the whole
+ * snapshot on a session missing a required key (later clients degrade the one
+ * session instead). `buildRemoteSnapshot` in `remote-bridge.ts` coerces each
+ * field for exactly this reason — keep that invariant when adding fields.
  */
 export interface RemoteSession {
   id: string
@@ -74,6 +80,18 @@ export interface RemoteSnapshot {
   groups: RemoteGroup[]
   pinnedGroups: RemotePinnedGroup[]
   focusedSessionId: string | null
+  /**
+   * Where a session created from a remote client can start: the host's
+   * most-recent-first new-session directories (the same MRU behind Cmd+N).
+   * The renderer supplies these; they can be empty before preferences load.
+   */
+  recentDirs: string[]
+  /**
+   * The host user's home directory, the create-session fallback when the MRU
+   * is empty. Main fills this in (the renderer has no `os` access), so the
+   * renderer pushes '' and `remote-server.ts` overwrites it.
+   */
+  homeDir: string
 }
 
 // ── Attach descriptors ─────────────────────────────────────────────────────
@@ -142,6 +160,11 @@ export type RemoteClientMessage =
  * Commands map 1:1 onto the renderer's existing MCP dispatcher
  * (`src/renderer/src/lib/mcp-dispatcher.ts`). No new command layer is written:
  * this is the single biggest reason the host-service route is cheap.
+ *
+ * `openSession` is the one command the server normalizes before forwarding
+ * (see `handleCommand` in `remote-server.ts`): a missing `cwd` is filled with
+ * the MRU head or the home directory, and `tmuxMode` is forced true, because a
+ * session a remote client creates and then cannot attach to is useless.
  */
 export type RemoteCommand =
   | 'list'
@@ -169,6 +192,23 @@ export const REMOTE_COMMANDS: readonly RemoteCommand[] = [
   'openFile',
   'notify'
 ]
+
+/**
+ * What a remote client sends as the `openSession` payload. A subset of
+ * `openSessionProgrammatically`'s full signature, spelled out here because it
+ * crosses the wire and the Swift client composes it.
+ *
+ * Every field is optional: an empty payload means "a terminal in the default
+ * directory", which is the iPad's one-tap New Session. `cwd` must be an
+ * absolute path when present — pick it from the snapshot's `recentDirs` or
+ * `homeDir` rather than composing paths client-side.
+ */
+export interface RemoteOpenSessionPayload {
+  cwd?: string
+  mode?: 'claude' | 'codex' | 'antigravity' | 'terminal'
+  /** A preset tab label. Omitted, the host titles the session itself. */
+  name?: string
+}
 
 // ── Server → client ────────────────────────────────────────────────────────
 

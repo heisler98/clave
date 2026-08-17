@@ -171,6 +171,9 @@ export async function openSessionProgrammatically(payload: {
   autoRun?: boolean
   prompt?: string
   callerSessionId?: string
+  /** Omitted follows the global tmux setting. The remote server forces true:
+   *  a session a remote client creates must be attachable from that client. */
+  tmuxMode?: boolean
 }): Promise<unknown> {
   const state = useSessionStore.getState()
   // Resolve the target group before spawning so a bad reference fails cleanly.
@@ -192,7 +195,8 @@ export async function openSessionProgrammatically(payload: {
     dangerousMode,
     initialCommand: mode === 'terminal' ? payload.command || undefined : undefined,
     autoExecute: mode === 'terminal' && !!payload.command && payload.autoRun !== false,
-    initialPrompt: mode !== 'terminal' ? payload.prompt || undefined : undefined
+    initialPrompt: mode !== 'terminal' ? payload.prompt || undefined : undefined,
+    ...(payload.tmuxMode === undefined ? {} : { tmuxMode: payload.tmuxMode })
   })
 
   state.addSession({

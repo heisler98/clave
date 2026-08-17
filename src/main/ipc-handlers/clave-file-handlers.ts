@@ -684,9 +684,17 @@ export function cleanupClaveWatchers(): void {
 
 // ── Inline preferences manager (simple key-value JSON file) ──
 
+// TWO Clave instances can share this file: the packaged app and `npm run dev`
+// both resolve userData to the same folder (the app name only differs in case,
+// and the disk is case-insensitive). A boot-time snapshot written back whole is
+// how one instance silently erases what the other saved — workspaces created in
+// the release app vanished after a dev run exactly this way. So the cache is
+// re-read whenever the file changed on disk, and every write merges on top of
+// the latest disk state instead of the snapshot.
 class PreferencesManager {
   private filePath: string
   private cache: Record<string, unknown> = {}
+  private loadedMtimeMs = -1
 
   constructor() {
     this.filePath = path.join(app.getPath('userData'), 'clave-preferences.json')
@@ -695,18 +703,31 @@ class PreferencesManager {
 
   private load(): void {
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf-8')
-      this.cache = JSON.parse(raw)
+      this.loadedMtimeMs = fs.statSync(this.filePath).mtimeMs
+      this.cache = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
     } catch {
+      this.loadedMtimeMs = -1
       this.cache = {}
     }
   }
 
+  private reloadIfChanged(): void {
+    let mtimeMs = -1
+    try {
+      mtimeMs = fs.statSync(this.filePath).mtimeMs
+    } catch {
+      return // no file — nothing newer than the cache exists
+    }
+    if (mtimeMs !== this.loadedMtimeMs) this.load()
+  }
+
   get(key: string): unknown {
+    this.reloadIfChanged()
     return this.cache[key] ?? null
   }
 
   set(key: string, value: unknown): void {
+    this.reloadIfChanged()
     this.cache[key] = value
     this.save()
   }
@@ -714,6 +735,7 @@ class PreferencesManager {
   private save(): void {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2), 'utf-8')
+      this.loadedMtimeMs = fs.statSync(this.filePath).mtimeMs
     } catch (err) {
       console.error('[preferences] Failed to save:', err)
     }
