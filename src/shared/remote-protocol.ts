@@ -295,9 +295,10 @@ export const REMOTE_COMMANDS: readonly RemoteCommand[] = [
  * crosses the wire and the Swift client composes it.
  *
  * Every field is optional: an empty payload means "a terminal in the default
- * directory", which is the iPad's one-tap New Session. `cwd` must be an
- * absolute path when present — pick it from the snapshot's `recentDirs` or
- * `homeDir` rather than composing paths client-side.
+ * directory". `cwd` may be one of the snapshot's `recentDirs`, the `homeDir`,
+ * or a path the user typed by hand: the server expands a leading `~`, then
+ * requires an existing directory and answers with a user-facing sentence when
+ * the path fails either test.
  */
 export interface RemoteOpenSessionPayload {
   cwd?: string

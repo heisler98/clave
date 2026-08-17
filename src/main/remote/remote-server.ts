@@ -1,4 +1,6 @@
 import * as os from 'os'
+import * as fs from 'fs'
+import { isAbsolute, join } from 'path'
 import { createHash, timingSafeEqual } from 'crypto'
 import { app } from 'electron'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -403,10 +405,40 @@ async function handleCommand(
   let payload = msg.payload
   if (msg.command === 'openSession') {
     const base = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
-    const cwd =
+    let cwd =
       typeof base.cwd === 'string' && base.cwd
         ? base.cwd
         : (cachedSnapshot?.recentDirs[0] ?? os.homedir())
+    // The client may send a hand-typed path (the iPad's new-session sheet has
+    // a path field), so expand a leading ~ and refuse anything that is not an
+    // existing directory here, with a sentence the client shows as-is —
+    // otherwise the failure surfaces later as a cryptic spawn error.
+    if (cwd === '~') cwd = os.homedir()
+    else if (cwd.startsWith('~/')) cwd = join(os.homedir(), cwd.slice(2))
+    if (!isAbsolute(cwd)) {
+      send(ws, {
+        type: 'result',
+        id: msg.id,
+        ok: false,
+        error: `The folder must be an absolute path. "${cwd}" is not.`
+      })
+      return
+    }
+    let isDirectory = false
+    try {
+      isDirectory = fs.statSync(cwd).isDirectory()
+    } catch {
+      // Missing path: isDirectory stays false.
+    }
+    if (!isDirectory) {
+      send(ws, {
+        type: 'result',
+        id: msg.id,
+        ok: false,
+        error: `There is no folder at "${cwd}" on the Mac.`
+      })
+      return
+    }
     payload = { ...base, cwd, tmuxMode: true }
   }
   try {
