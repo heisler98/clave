@@ -126,6 +126,11 @@ export function useTerminal(sessionId: string) {
     let lastSentCols = terminal.cols
     let lastSentRows = terminal.rows
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
+      // Before startSession has run there is no pty to resize, and letting the
+      // resize through would promote-spawn it in main WITHOUT the history
+      // replay a running session needs. startIfPossible (below) is the one
+      // starter; it carries the same cols/rows.
+      if (!hasStarted) return
       if (cols === lastSentCols && rows === lastSentRows) return
       lastSentCols = cols
       lastSentRows = rows
@@ -313,6 +318,12 @@ export function useTerminal(sessionId: string) {
         } catch {
           // ignore
         }
+        // A terminal that mounted hidden (its tab was not selected, or the
+        // whole grid was display:none) skipped the initial fit AND the
+        // startSession below it, so main never replayed the session's history
+        // into it — the "blank tab over a live shell" bug. The first real fit
+        // is the earliest moment the session can start at its true size.
+        startIfPossible()
       }, 250)
     })
     resizeObserver.observe(container)

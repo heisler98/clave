@@ -95,8 +95,12 @@ export function useToolbarTerminal({ sessionId, persistent }: UseToolbarTerminal
     })
     resizeObserver.observe(container)
 
-    // Initial resize sync
-    window.electronAPI.resizeSession(sessionId, terminal.cols, terminal.rows)
+    // Start (or reattach to) the pty at this terminal's size. For a fresh
+    // session this finalises the deferred spawn; for a persistent session
+    // whose popover reopened, it is what replays the history into this
+    // brand-new xterm — a bare resize does neither, and left every reopened
+    // toolbar terminal blank over a live process.
+    window.electronAPI.startSession(sessionId, terminal.cols, terminal.rows)
 
     // Focus on mount
     terminal.focus()

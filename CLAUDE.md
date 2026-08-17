@@ -30,6 +30,10 @@ Three-process Electron app:
 - **Stores**: Zustand stores in `src/renderer/src/store/`. `session-store.ts` is the main one (sessions, groups, layout, theme).
 - **Design system**: `main.css` defines semantic CSS classes (`sidebar-item`, `btn-primary`, `btn-secondary`, `btn-dialog`, `btn-icon`, `input-field`, `input-compact`, `badge`, etc.) that are the single source of truth for spacing, radius, shadows, and interactive states. All UI components must use these tokens instead of repeating inline Tailwind patterns. Never duplicate styling logic across components. When adding new UI, check `main.css` for an existing class first; if none fits, extend the design system with a new semantic class rather than inlining styles. The goal is visual coherence through a unified system where components inherit from the same parameters.
 
+## Git
+
+- Commit your work when finished, in both the `clave` and `clave-ios` repositories; you may push your work to both repositories.
+
 ## Signing and notarization
 
 Builds require Apple code signing. Credentials in `.env` (not committed):

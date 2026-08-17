@@ -21,6 +21,7 @@ import { cleanupClaveWatchers } from './ipc-handlers/clave-file-handlers'
 import { startMcpServer, stopMcpServer } from './mcp/mcp-server'
 import { startRemoteServer, stopRemoteServer } from './remote/remote-server'
 import { initChatManager } from './chat-manager'
+import { startCommandTitlePoller, stopCommandTitlePoller } from './command-title-poller'
 import { sweepSessionMcpConfigs } from './mcp/mcp-runtime'
 
 function createWindow(): void {
@@ -123,6 +124,9 @@ app.whenReady().then(() => {
   sweepSessionMcpConfigs()
   cleanupDroppedFiles()
   initNotificationManager()
+  // Terminal tabs title themselves from their foreground command; see
+  // command-title-poller.ts.
+  startCommandTitlePoller()
   applyPersistedIcon()
   createWindow()
   initAutoUpdater()
@@ -159,6 +163,7 @@ app.on('before-quit', () => {
   cleanupAutoUpdater()
   cleanupTelemetry()
   cleanupMissionControl()
+  stopCommandTitlePoller()
   stopMcpServer()
   stopRemoteServer()
 })

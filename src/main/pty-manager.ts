@@ -189,6 +189,27 @@ export function getLoginShellEnv(): Record<string, string> {
  *  default tmux server (and a stray `tmux kill-server` can't nuke their work). */
 export const TMUX_SOCKET = 'clave'
 
+/** Terminal interrogation sequences that may sit in a session's recorded
+ *  output: DSR/CPR (`CSI n`, `CSI 6 n`), device attributes (`CSI c`,
+ *  `CSI > c`, `CSI = c`), XTVERSION (`CSI > q`), XTWINOPS size queries
+ *  (`CSI 14/16/18/19/20/21 t`), DECRQM mode probes (`CSI ? Pm $ p`), the
+ *  kitty keyboard probe (`CSI ? u`), and OSC color queries (`OSC 10/11/4 ;?`).
+ *  Replaying them into a fresh terminal makes it answer questions nobody is
+ *  asking anymore; see replayTo. Responses are untouched — they only ever
+ *  travel the other direction, so they never appear in recorded output. */
+const REPLAYED_QUERY_SEQUENCES = new RegExp(
+  [
+    '\\x1b\\[\\??\\d*n', // DSR / CPR queries (5n, 6n, ?6n…)
+    '\\x1b\\[(?:>|=)?0?c', // DA1 / DA2 / DA3 queries
+    '\\x1b\\[>0?q', // XTVERSION query
+    '\\x1b\\[(?:1[4689]|2[01])t', // XTWINOPS size queries
+    '\\x1b\\[\\?\\d+\\$p', // DECRQM mode probes
+    '\\x1b\\[\\?u', // kitty keyboard probe
+    '\\x1b\\](?:1[01]|4;\\d+);\\?(?:\\x07|\\x1b\\\\)' // OSC color queries
+  ].join('|'),
+  'g'
+)
+
 // undefined = not probed yet, null = tmux not installed, string = absolute path
 let tmuxPathCache: string | null | undefined
 let tmuxConfigPathCache: string | null = null
@@ -424,9 +445,65 @@ function deleteTmuxSidecar(tmuxName: string): void {
  *  (Starting a server here would race that load, so we only touch a live one.) */
 function reconcileTmuxBindings(tmuxPath: string): void {
   if (liveTmuxSessions(tmuxPath).size === 0) return
+  // A live server was started by an earlier Clave and is still running the
+  // config it booted with — "an adopted session scrolls differently or does
+  // not scroll at all" is what that looks like from the outside. Re-apply the
+  // SCROLL-related pieces of the config individually.
+  //
+  // Deliberately NOT `source-file`: the full config carries default-terminal,
+  // terminal-features, and extended-keys, and re-applying those to a live
+  // server makes tmux re-run client feature detection — it re-interrogates
+  // every attached client (DA1/DA2/XTVERSION/size), the emulators answer, and
+  // any reply landing after tmux's detection window is forwarded into the
+  // pane as keystrokes. That is the "?65;4;…c >|SwiftTerm…" garbage typed
+  // into every session's input line.
+  const scrollCommands: string[][] = [
+    ['set', '-g', 'mouse', 'on'],
+    ['set', '-g', 'window-size', 'latest'],
+    ['set', '-g', 'history-limit', '50000'],
+    [
+      'bind',
+      '-n',
+      'WheelUpPane',
+      'if',
+      '-Ft=',
+      '#{mouse_any_flag}',
+      'send -M',
+      "if -Ft= '#{pane_in_mode}' 'send -X -N 3 scroll-up' 'copy-mode -e'"
+    ],
+    [
+      'bind',
+      '-n',
+      'WheelDownPane',
+      'if',
+      '-Ft=',
+      '#{mouse_any_flag}',
+      'send -M',
+      "if -Ft= '#{pane_in_mode}' 'send -X -N 3 scroll-down' 'send -M'"
+    ],
+    ['bind', '-T', 'copy-mode', 'MouseDragEnd1Pane', 'send', '-X', 'copy-pipe-and-cancel', 'pbcopy'],
+    [
+      'bind',
+      '-T',
+      'copy-mode-vi',
+      'MouseDragEnd1Pane',
+      'send',
+      '-X',
+      'copy-pipe-and-cancel',
+      'pbcopy'
+    ]
+  ]
+  for (const args of scrollCommands) {
+    try {
+      execFileSync(tmuxPath, ['-L', TMUX_SOCKET, ...args], { stdio: 'ignore' })
+    } catch {
+      // Best effort — a failed set leaves the server as it was.
+    }
+  }
   // Drop the legacy `MouseDown1Pane -> cancel` binding: the press fires before
   // the drag, so it snapped scrollback to the bottom on click and made
   // highlighting impossible. Without it, copy-mode's default drag-select works.
+  // (Explicit because omission from the config can't unset a live binding.)
   for (const table of ['copy-mode', 'copy-mode-vi']) {
     try {
       execFileSync(tmuxPath, ['-L', TMUX_SOCKET, 'unbind', '-T', table, 'MouseDown1Pane'], {
@@ -509,6 +586,15 @@ export interface PtySession {
   claudeSessionId?: string
   /** Set when this session is backed by a tmux session (the tmux session name). */
   tmuxName?: string
+  /** True for a `claude` session (drives the bracketed-paste replay preamble). */
+  claudeMode?: boolean
+  /** True for any agent CLI session (claude/agy/codex/claude-agents). A plain
+   *  terminal is the only kind the command-title poller renames. */
+  agentMode?: boolean
+  /** The tty of the tmux pane, resolved lazily by the command-title poller. */
+  paneTty?: string | null
+  /** The last command title the poller pushed, to send only real changes. */
+  lastCommandTitle?: string
   pending?: PendingSpawn
   onData?: (data: string) => void
   onExit?: (exitCode: number) => void
@@ -718,6 +804,8 @@ class PtyManager {
     }
     if (claudeSessionId) session.claudeSessionId = claudeSessionId
     if (tmuxName) session.tmuxName = tmuxName
+    session.claudeMode = useClaudeMode
+    session.agentMode = useClaudeMode || useAntigravityMode || useCodexMode || useAgentsMode
     // Adoption restores the tab under its persisted name, so carry it into the
     // in-memory record too — otherwise main would title notifications for a
     // re-adopted tab with the folder name until the next rename.
@@ -778,7 +866,22 @@ class PtyManager {
       // prints something unprompted, which for an idle session may be never.
       if (session.alive) {
         this.replayTo(session)
-        session.ptyProcess.resize(Math.max(1, cols), Math.max(1, rows))
+        const c = Math.max(1, cols)
+        const r = Math.max(1, rows)
+        const proc = session.ptyProcess
+        const sameSize = proc.cols === c && proc.rows === r
+        proc.resize(c, r)
+        if (sameSize && session.tmuxName) {
+          // Same-size reattach: the kernel drops a no-op winsize change, so no
+          // SIGWINCH lands and nothing repaints — the replayed tail (bounded,
+          // and laid out for whenever it was captured) would be all this
+          // terminal ever shows. `refresh-client` makes tmux repaint OUR
+          // client without touching the pane. A resize jog would repaint too,
+          // but its SIGWINCH makes agent TUIs re-interrogate the terminal, and
+          // with a second client attached (the iPad) the duplicate replies
+          // come back as typed garbage.
+          this.refreshTmuxClient(session)
+        }
       }
       return
     }
@@ -854,15 +957,58 @@ class PtyManager {
    *  printed. Goes out on the session's normal data channel because it *is* the
    *  session's output — the renderer's activity/prompt heuristics read the
    *  screen, and they should see the same screen a live attach would have
-   *  produced. */
+   *  produced.
+   *
+   *  The tail is prefixed with the DECSETs the session's previous terminal was
+   *  put into when it attached. They were emitted exactly once — tmux enters
+   *  the alternate screen and turns mouse reporting on when its client starts,
+   *  claude enables bracketed paste at its prompt — so on a long-lived session
+   *  they scrolled out of the bounded buffer long ago. A new xterm replayed
+   *  without them lands in the normal buffer with a dead wheel: scrollback
+   *  looks empty, the wheel never reaches tmux's WheelUpPane bindings, and
+   *  "the session can't scroll" is the user-visible result. */
   private replayTo(session: PtySession): void {
-    const buffered = session.replay?.read()
-    if (!buffered || !session.onData) return
+    if (!session.onData) return
+    let preamble = ''
+    if (session.tmuxName) preamble += '\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h'
+    if (session.claudeMode) preamble += '\x1b[?2004h'
+    const buffered = session.replay?.read() ?? ''
+    // Strip terminal QUERIES from the tail. The recorded stream contains the
+    // interrogations tmux and the agent CLIs sent to the ORIGINAL terminal
+    // (device attributes, version, cell/pixel size, cursor position, mode
+    // probes). A freshly created xterm auto-answers anything it is fed, those
+    // answers go into the pty as input, and everything downstream already got
+    // its answers long ago — so tmux forwards the stale replies into the pane
+    // as keystrokes. That is the "?65;4;…c" garbage typed at the prompt.
+    const payload = preamble + buffered.replace(REPLAYED_QUERY_SEQUENCES, '')
+    if (!payload) return
     try {
-      session.onData(buffered)
+      session.onData(payload)
     } catch (err) {
       console.error(`[pty] replay failed for session ${session.id}`, err)
     }
+  }
+
+  /** Force tmux to repaint this session's OWN client (the node-pty one — its
+   *  pid is the tmux client process). Used on same-size reattach, where no
+   *  SIGWINCH will fire; unlike a resize jog it involves neither the pane
+   *  process nor any other attached client. */
+  private refreshTmuxClient(session: PtySession): void {
+    const tmuxPath = detectTmux()
+    const pid = session.ptyProcess?.pid
+    if (!tmuxPath || !session.tmuxName || !pid) return
+    execFile(
+      tmuxPath,
+      ['-L', TMUX_SOCKET, 'list-clients', '-t', session.tmuxName, '-F', '#{client_pid}\t#{client_tty}'],
+      { timeout: 2000 },
+      (err, stdout) => {
+        if (err) return
+        const line = stdout.split('\n').find((l) => l.startsWith(`${pid}\t`))
+        const tty = line?.split('\t')[1]?.trim()
+        if (!tty) return
+        execFile(tmuxPath, ['-L', TMUX_SOCKET, 'refresh-client', '-t', tty], { timeout: 2000 }, () => {})
+      }
+    )
   }
 
   write(id: string, data: string): void {
@@ -958,6 +1104,16 @@ class PtyManager {
     const session = this.sessions.get(id)
     if (!session) return null
     return session.displayName?.trim() || session.folderName
+  }
+
+  /** Live sessions the command-title poller may rename: plain terminals only.
+   *  Agent sessions title themselves (transcript-based for Claude), and
+   *  `agentMode === false` is deliberate — a session whose mode is unknown is
+   *  left alone rather than renamed on a guess. */
+  commandTitleCandidates(): PtySession[] {
+    return Array.from(this.sessions.values()).filter(
+      (s) => s.alive && !!s.ptyProcess && s.agentMode === false
+    )
   }
 
   /**

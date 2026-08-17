@@ -212,7 +212,7 @@ Three per-session modes, remembered per session and settable as a global default
 | Mode | Client pty | Attach | Effect |
 |---|---|---|---|
 | **Mirror** (default) | host's cols x rows | `-f ignore-size` | Full fidelity, desktop geometry untouched. Font scales to fit; pan when the scale gets too small. |
-| **Takeover** | iPad's natural grid | plain attach | tmux reflows the window to the iPad. Right when the Mac is asleep or unattended. |
+| **Takeover** | iPad's natural grid | plain attach | tmux reflows the window to the iPad. Right when the Mac is asleep or unattended. Implemented client-side as `.fitPane` sizing: the surface derives cols x rows from the visible pane at a readable font (`ClaveTerminalView.applyFitToPane`), reports grid changes to `HostRuntime.takeoverGridChanged`, and the driver re-sizes its SSH pty (`window-change`) so tmux follows. Host `geometry` events are ignored for attachments without `ignore-size` (`LiveHostDriver.applyGeometry`), because in takeover the iPad, not the Mac, owns the size. |
 | **Watch** | host's cols x rows | `-f read-only,ignore-size` | Read-only monitoring, verified to block input. Genuinely useful on a tablet. |
 
 Mirror mode is more viable than it sounds. An 11-inch iPad in landscape is about 1180pt wide; at
