@@ -615,6 +615,19 @@ class PtyManager {
    * `start(id, cols, rows)` finalises the spawn at the correct size.
    */
   spawn(cwd: string, options?: PtySpawnOptions): PtySession {
+    // A renderer-only reload (a Vite full page reload in dev, a crashed page)
+    // re-runs launch adoption while this process still tracks the session.
+    // Hand back the live record instead of building a new one: a fresh spawn
+    // would overwrite the map entry under the same id — orphaning the running
+    // tmux client — and then `-A`-attach a second client onto the same tmux
+    // session.
+    if (options?.adoptTmuxName && options.adoptSessionId) {
+      const existing = this.sessions.get(options.adoptSessionId)
+      if (existing?.alive && existing.tmuxName === options.adoptTmuxName) {
+        return existing
+      }
+    }
+
     // Reuse the original id when adopting a survivor, so the Claude hook state
     // file (baked with this id at first spawn) still routes to this tab.
     const id =
@@ -1135,17 +1148,21 @@ class PtyManager {
    * back to a non-tmux spawn if that write fails), our own sessions are always
    * tracked. Sidecars are pruned only when malformed or when their cwd no longer
    * exists (un-restorable) — so they can't accumulate across reboots.
+   *
+   * Sessions this process already tracks in `this.sessions` are returned too,
+   * NOT filtered out. Main's map is the wrong key for "already showing as a
+   * tab": a renderer-only reload (dev HMR falling back to a full page reload)
+   * empties the renderer store while main keeps every session, and filtering
+   * on the map made every live session unadoptable exactly when the renderer
+   * needed to rebuild its tabs. The renderer dedupes against its own store,
+   * and spawn() re-adopts an already-tracked session in place instead of
+   * spawning a duplicate tmux client.
    */
   listAdoptableTmuxSessions(): AdoptableTmuxSession[] {
     const tmuxPath = detectTmux()
     if (!tmuxPath) return []
 
     const live = liveTmuxSessions(tmuxPath)
-    const alreadyAdopted = new Set(
-      Array.from(this.sessions.values())
-        .map((s) => s.tmuxName)
-        .filter((n): n is string => !!n)
-    )
 
     const dir = tmuxSidecarDir()
     let files: string[] = []
@@ -1184,9 +1201,7 @@ class PtyManager {
         deleteTmuxSidecar(meta.tmuxName)
         continue
       }
-      if (!alreadyAdopted.has(meta.tmuxName)) {
-        adoptable.push({ ...meta, live: isLive })
-      }
+      adoptable.push({ ...meta, live: isLive })
     }
 
     return adoptable

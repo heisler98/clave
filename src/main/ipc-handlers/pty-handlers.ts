@@ -45,16 +45,24 @@ export function registerPtyHandlers(): void {
     // Same shape for Clave's own MCP server: a global setting, ON by default,
     // overridable per spawn.
     const claveMcp = options?.claveMcp ?? getPreference('claveMcpEnabled') !== false
+    // When adopting, spawn() may return the session this process already
+    // tracks (a renderer-only reload re-runs adoption while main kept
+    // everything). That session is mid-run: rewire its IPC listeners below,
+    // but don't reset its event log or reschedule titling.
+    const preexisting = options?.adoptSessionId
+      ? ptyManager.getSession(options.adoptSessionId)
+      : undefined
     const session = ptyManager.spawn(cwd, { ...options, tmuxMode, claveMcp })
+    const readopted = session === preexisting
     // Adoption reuses the previous run's session id, so an event file from that
     // run can still be on disk. Start every session from an empty log.
-    clearAgentEvents(session.id)
+    if (!readopted) clearAgentEvents(session.id)
     const win = BrowserWindow.fromWebContents(_event.sender)
     const isClaudeMode = options?.claudeMode !== false && !options?.antigravityMode && !options?.codexMode && !options?.claudeAgentsMode
     const isResumed = !!options?.resumeSessionId
 
     // Schedule title generation for new Claude-mode sessions
-    if (isClaudeMode && !isResumed && session.claudeSessionId && win) {
+    if (isClaudeMode && !isResumed && !readopted && session.claudeSessionId && win) {
       titleGenerator.scheduleTitleGeneration(session.id, session.cwd, session.claudeSessionId, win)
     }
 

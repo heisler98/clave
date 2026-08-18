@@ -116,8 +116,18 @@ export function AppShell() {
         }
 
         const survivors = await window.electronAPI?.tmuxListAdoptable?.()
+        // The adoptable list is keyed off sidecars + the tmux server, not off
+        // what this renderer is showing — main can't know that. Skip sessions
+        // the store already has (a Fast Refresh re-run of this effect after a
+        // hot-apply, where the store survived) so they aren't adopted twice;
+        // count them as adopted so restoreGroups still keeps their groups.
+        const shown = new Set(useSessionStore.getState().sessions.map((x) => x.id))
         const adoptedIds: string[] = []
         for (const s of survivors ?? []) {
+          if (shown.has(s.id)) {
+            adoptedIds.push(s.id)
+            continue
+          }
           try {
             const info = await window.electronAPI.spawnSession(s.cwd, {
               claudeMode: s.claudeMode,

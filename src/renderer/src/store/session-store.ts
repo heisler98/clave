@@ -247,6 +247,12 @@ function persistSessionName(
 export function enableSidebarPersistence(): void {
   sidebarPersistEnabled = true
   const { groups, displayOrder } = useSessionStore.getState()
+  // An empty store at launch has nothing worth writing: either the saved file
+  // is already empty, or adoption just failed and the file still holds a real
+  // layout that the next launch needs. Skip the initial write rather than
+  // overwrite it with emptiness; the first actual sidebar change (including a
+  // deliberate close-everything) persists through the subscriber as usual.
+  if (groups.length === 0 && displayOrder.length === 0) return
   persistSidebarLayout(groups, displayOrder)
 }
 
