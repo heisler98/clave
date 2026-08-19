@@ -10,7 +10,9 @@ info()  { echo -e "${GREEN}[release]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[release]${NC} $*"; }
 error() { echo -e "${RED}[release]${NC} $*" >&2; exit 1; }
 
-RELEASE_BRANCH="prod"
+# Overridable so a fork can cut releases from a different branch without
+# editing this script.
+RELEASE_BRANCH="${CLAVE_RELEASE_BRANCH:-prod}"
 
 # ── Usage ──────────────────────────────────────────────────────────
 usage() {
@@ -68,6 +70,13 @@ fi
 command -v gh   >/dev/null 2>&1 || error "gh CLI not found. Install: brew install gh"
 command -v node >/dev/null 2>&1 || error "node not found"
 command -v npm  >/dev/null 2>&1 || error "npm not found"
+
+# Signing is checked before the version bump, not after. A missing
+# certificate used to surface ten minutes into the build, with a version
+# bump already committed on top of the release branch.
+# shellcheck source=scripts/lib/signing-preflight.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/signing-preflight.sh"
+clave_preflight_signing || error "Signing preflight failed. Nothing was bumped, built, or pushed."
 
 BRANCH=$(git branch --show-current)
 if [[ "$BRANCH" != "$RELEASE_BRANCH" ]]; then
@@ -135,13 +144,6 @@ info "Committed version bump"
 # ── Build ──────────────────────────────────────────────────────────
 info "Building macOS app (this takes a few minutes)..."
 
-if [[ -f .env ]]; then
-  info "Sourcing .env for signing credentials"
-  set -a; source .env; set +a
-elif [[ -z "${CSC_LINK:-}" ]]; then
-  error "No .env and no CSC_LINK in the environment — cannot sign"
-fi
-
 npm run build:mac
 
 # ── Verify artifacts ───────────────────────────────────────────────
@@ -181,4 +183,5 @@ fi
 rm -f "$NOTES_FILE"
 
 info "Release v${NEW_VERSION} published!"
-info "https://github.com/codika-io/clave/releases/tag/v${NEW_VERSION}"
+REPO_URL="$(git remote get-url --push origin | sed -e 's#^git@github.com:#https://github.com/#' -e 's#\.git$##')"
+info "${REPO_URL}/releases/tag/v${NEW_VERSION}"

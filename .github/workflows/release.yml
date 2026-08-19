@@ -27,6 +27,11 @@ concurrency:
 
 jobs:
   release:
+    # Upstream only. A fork has neither the signing secrets nor the release
+    # deploy key, so a push to its prod would burn a macOS runner and fail on
+    # the first codesign call. Fork releases are cut locally with
+    # `npm run release` — see docs/packaging.md.
+    if: github.repository == 'codika-io/clave'
     runs-on: macos-latest
     timeout-minutes: 90
     steps:

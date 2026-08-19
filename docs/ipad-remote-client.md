@@ -650,7 +650,10 @@ Two caveats recorded honestly:
   the full entitlements. The container fallback is deleted (`grep -r targetEnvironment(simulator)
   Sources/` is empty) and the key round-trips through the real Keychain across relaunch and
   reinstall. Verified independently: both the simulator and device `.xcent` carry
-  `keychain-access-groups: [UR4RG553ZN.io.codika.clave.ios]`.
+  `keychain-access-groups: [UR4RG553ZN.io.codika.clave.ios]`. (The bundle id later moved to
+  `com.appsandsides.clave.app` for App Store distribution, and the access group follows it.
+  Renaming it regenerates the device key, so the iPad's public half has to be re-added to
+  `~/.ssh/authorized_keys`.)
 - Text entry during the simulator drive needed `osascript`, because the iOS Simulator exposes text
   fields read-only over the accessibility API. A UI-test target is the right answer later.
 
