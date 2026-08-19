@@ -17,17 +17,23 @@ installer flow itself.
    Certificates → + → Developer ID Application. Nothing is exported: electron-builder finds the
    identity in the login keychain. An Apple Development certificate cannot be notarized, which is
    the difference between this and `build:mac:local`.
-2. **An app-specific password** from appleid.apple.com → Sign-In and Security → App-Specific
-   Passwords. notarytool rejects the regular Apple ID password.
-3. **`.env`**, from the template: `cp .env.example .env`, then fill `APPLE_ID` and
-   `APPLE_APP_SPECIFIC_PASSWORD`. `APPLE_TEAM_ID` is already there. The file is gitignored and
-   excluded from the packaged app.
+2. **An App Store Connect API key**, from App Store Connect → Users and Access → Integrations →
+   App Store Connect API. The `.p8` downloads exactly once; keep it at
+   `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`, where both notarytool and altool find it
+   by key id. The same key uploads the iPad app to TestFlight.
+3. **`.env`**, from the template: `cp .env.example .env`, then fill `APPLE_API_KEY`,
+   `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`. The file is gitignored and excluded from the
+   packaged app. An Apple ID with an app-specific password works instead, and electron-builder
+   checks for it first, so setting `APPLE_ID` takes the key out of play.
 4. **`gh`**: `brew install gh && gh auth login`. `release.sh` uses it to create the release and
    attach the artifacts.
 
 `scripts/lib/signing-preflight.sh` checks all of this before anything is built, bumped, or pushed,
-and names whatever is missing. An App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`,
-`APPLE_API_ISSUER`) is accepted in place of the Apple ID trio if you already keep one for TestFlight.
+and names whatever is missing. It mirrors electron-builder's own credential precedence, including
+the part worth knowing: with no notarization credentials at all, electron-builder skips
+notarization **silently** and hands you an unnotarized build. When an API key is configured, the
+preflight also spends one round trip on `notarytool history`, so a wrong issuer or an
+under-privileged key surfaces now rather than after the build.
 
 ## Cutting a release
 
@@ -81,5 +87,6 @@ Reinstalling an upstream build later overwrites this one, because they share the
 
 ## The iPad client
 
-`clave-ios` builds and ships separately: `./build-ipa.sh` produces a signed `.ipa` for Transporter,
-and TestFlight distribution is documented in that repo's README.
+`clave-ios` builds and ships separately: `./build-ipa.sh` produces a signed `.ipa`, and
+`--upload` sends it to App Store Connect with the same API key that notarizes this app. TestFlight
+distribution is documented in that repo's README.
