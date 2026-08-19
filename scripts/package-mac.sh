@@ -15,6 +15,7 @@
 #   --no-notarize    sign but skip notarization; Gatekeeper will still block
 #                    this build on another Mac, so it is for local checks only
 #   --open           reveal the finished bundle in Finder
+#   --verify-only    re-run the checks against the last build, building nothing
 
 set -euo pipefail
 
@@ -27,6 +28,7 @@ source scripts/lib/signing-preflight.sh
 ARCH="${CLAVE_PACKAGE_ARCH:-universal}"
 NOTARIZE=1
 REVEAL=0
+VERIFY_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --universal)   ARCH="universal"; shift ;;
     --no-notarize) NOTARIZE=0; shift ;;
     --open)        REVEAL=1; shift ;;
+    --verify-only) VERIFY_ONLY=1; shift ;;
     -h|--help)     awk 'NR>1 { if (/^#/) { sub(/^# ?/, ""); print } else { exit } }' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -44,24 +47,29 @@ fail() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ "$ARCH" == "universal" || "$ARCH" == "arm64" ]] || fail "arch must be universal or arm64, got '$ARCH'"
 
-# ── Preflight ───────────────────────────────────────────────────────────────
-[[ "$NOTARIZE" -eq 1 ]] || export CLAVE_SKIP_NOTARIZE=1
-clave_preflight_signing || fail "Signing preflight failed. Nothing was built."
-
 VERSION="$(node -p "require('./package.json').version")"
 APP_PATH="dist/mac-${ARCH}/Clave.app"
 
-bold "Packaging Clave ${VERSION} (${ARCH}, notarize=$([[ $NOTARIZE -eq 1 ]] && echo yes || echo no))"
+if [[ $VERIFY_ONLY -eq 1 ]]; then
+  bold "Verifying the existing ${ARCH} build of Clave ${VERSION}"
+  [[ -d "$APP_PATH" ]] || fail "$APP_PATH does not exist. Run without --verify-only first."
+else
+  # ── Preflight ─────────────────────────────────────────────────────────────
+  [[ "$NOTARIZE" -eq 1 ]] || export CLAVE_SKIP_NOTARIZE=1
+  clave_preflight_signing || fail "Signing preflight failed. Nothing was built."
 
-# ── Build ───────────────────────────────────────────────────────────────────
-npm run build
+  bold "Packaging Clave ${VERSION} (${ARCH}, notarize=$([[ $NOTARIZE -eq 1 ]] && echo yes || echo no))"
 
-BUILDER_ARGS=(--mac "--${ARCH}" --publish never)
-[[ "$NOTARIZE" -eq 1 ]] || BUILDER_ARGS+=(-c.mac.notarize=false)
+  # ── Build ─────────────────────────────────────────────────────────────────
+  npm run build
 
-npx electron-builder "${BUILDER_ARGS[@]}"
+  BUILDER_ARGS=(--mac "--${ARCH}" --publish never)
+  [[ "$NOTARIZE" -eq 1 ]] || BUILDER_ARGS+=(-c.mac.notarize=false)
 
-[[ -d "$APP_PATH" ]] || fail "electron-builder reported success but $APP_PATH is missing"
+  npx electron-builder "${BUILDER_ARGS[@]}"
+
+  [[ -d "$APP_PATH" ]] || fail "electron-builder reported success but $APP_PATH is missing"
+fi
 
 # ── Verify ──────────────────────────────────────────────────────────────────
 # Each check answers a different question, and each one has bitten a Clave
@@ -70,16 +78,22 @@ npx electron-builder "${BUILDER_ARGS[@]}"
 echo
 bold "Verifying $APP_PATH"
 
-codesign --verify --strict --verbose=2 "$APP_PATH" 2>&1 | sed 's/^/  /'
+codesign --verify --strict "$APP_PATH" 2>&1 | sed 's/^/  /'
+echo "  signature: valid, satisfies its designated requirement"
 
-AUTHORITY="$(codesign -dvv "$APP_PATH" 2>&1 | awk -F'=' '/Authority=/ {print $2; exit}')"
+# Read once into a variable and parse from a here-string. Piping into an awk
+# that exits early makes codesign die of SIGPIPE, and under `set -o pipefail`
+# that failure propagates into the assignment and ends the script — which is
+# exactly what silently truncated this report on its first real run.
+SIGN_INFO="$(codesign -dvv "$APP_PATH" 2>&1 || true)"
+AUTHORITY="$(awk -F'=' '/^Authority=/ {print $2; exit}' <<< "$SIGN_INFO")"
 echo "  authority: ${AUTHORITY:-unknown}"
+echo "  architectures: $(lipo -archs "$APP_PATH/Contents/MacOS/Clave" 2>/dev/null || echo unknown)"
 
 # The microphone entitlement is what lets voice input prompt at all. Same check
 # build-mac-local.sh makes, for the same reason: it fails silently at runtime.
-if codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null \
-    | plutil -p - 2>/dev/null \
-    | grep -q 'com.apple.security.device.audio-input'; then
+ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null | plutil -p - 2>/dev/null || true)"
+if grep -q 'com.apple.security.device.audio-input' <<< "$ENTITLEMENTS"; then
   echo "  microphone entitlement: present"
 else
   fail "com.apple.security.device.audio-input is missing from the signed app."
@@ -92,8 +106,9 @@ if [[ "$NOTARIZE" -eq 1 ]]; then
     fail "No stapled notarization ticket. The build is signed but Gatekeeper will reject it on another Mac."
   fi
 
-  if spctl -a -vvv -t install "$APP_PATH" 2>&1 | grep -q "accepted"; then
-    echo "  gatekeeper: accepted"
+  GATEKEEPER="$(spctl -a -vvv -t install "$APP_PATH" 2>&1 || true)"
+  if grep -q "accepted" <<< "$GATEKEEPER"; then
+    echo "  gatekeeper: accepted ($(awk -F'=' '/^source=/ {print $2; exit}' <<< "$GATEKEEPER"))"
   else
     fail "spctl rejected the bundle. Run: spctl -a -vvv -t install \"$APP_PATH\""
   fi
@@ -105,7 +120,7 @@ bold "Artifacts"
 for f in "$APP_PATH" \
          "dist/clave-${VERSION}.dmg" \
          "dist/Clave-${VERSION}-${ARCH}-mac.zip"; do
-  [[ -e "$f" ]] && printf '  %-46s %s\n' "$f" "$(du -h "$f" | cut -f1)"
+  [[ -e "$f" ]] && printf '  %-46s %s\n' "$f" "$(du -sh "$f" | cut -f1)"
 done
 
 echo
