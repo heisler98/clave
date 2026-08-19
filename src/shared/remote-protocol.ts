@@ -82,6 +82,19 @@ export interface RemoteSnapshot {
   sessions: RemoteSession[]
   groups: RemoteGroup[]
   pinnedGroups: RemotePinnedGroup[]
+  /**
+   * The sidebar's TOP-LEVEL order: session ids and group ids interleaved,
+   * exactly as `displayOrder` holds them in the renderer's store. A group's own
+   * members are ordered by its `sessionIds`, so the two together describe the
+   * sidebar completely.
+   *
+   * Sessions a remote client cannot see (file tabs, OpenClaw-backed sessions)
+   * are filtered out host-side, so every id here resolves to a session or a
+   * group in the same snapshot. Empty on hosts that predate organizing; a
+   * client that sees an empty array falls back to "groups first, loose
+   * sessions after", which is what it did before this field existed.
+   */
+  displayOrder: string[]
   focusedSessionId: string | null
   /**
    * Where a session created from a remote client can start: the host's
@@ -270,6 +283,11 @@ export type RemoteCommand =
   | 'focus'
   | 'createGroup'
   | 'moveSession'
+  | 'moveItems'
+  | 'ungroupSessions'
+  | 'deleteGroup'
+  | 'setGroupColor'
+  | 'undoSidebar'
   | 'launchGroup'
   | 'addGroupTerminal'
   | 'openFile'
@@ -283,11 +301,64 @@ export const REMOTE_COMMANDS: readonly RemoteCommand[] = [
   'focus',
   'createGroup',
   'moveSession',
+  'moveItems',
+  'ungroupSessions',
+  'deleteGroup',
+  'setGroupColor',
+  'undoSidebar',
   'launchGroup',
   'addGroupTerminal',
   'openFile',
   'notify'
 ]
+
+// ── Organizing payloads ────────────────────────────────────────────────────
+//
+// The five commands above `launchGroup` are the sidebar's own vocabulary, so a
+// remote client can reorganize the Mac's tabs the way the sidebar does:
+// reorder, regroup, ungroup, recolour, and take it back. Each maps 1:1 onto an
+// action of the renderer's session store, so nothing new is invented here.
+
+/**
+ * `moveItems.targetId` when the destination is the top level rather than a
+ * neighbour: the sentinel matches no session and no group, which the store's
+ * `moveItems` already resolves as "append at top level". Ungrouping is exactly
+ * this move, which is why it needs no command of its own.
+ */
+export const REMOTE_ROOT_TARGET = '__clave-remote-root__'
+
+/** `createGroup`. An empty `sessionIds` makes an empty group, ready to be
+ *  moved into; the sidebar prunes a group the moment its last tab leaves. */
+export interface RemoteCreateGroupPayload {
+  name?: string
+  sessionIds?: string[]
+}
+
+/**
+ * `moveItems`, the whole of drag and drop in one command.
+ *   • `position: 'inside'` with a group id  → append to that group
+ *   • `'before' | 'after'` with a session id → sit next to it, inside its
+ *     group when it has one, at the top level when it does not
+ *   • `'before' | 'after'` with a group id   → sit next to the group, top level
+ *   • `REMOTE_ROOT_TARGET`                   → append at the top level
+ */
+export interface RemoteMoveItemsPayload {
+  itemIds: string[]
+  targetId: string
+  position: 'before' | 'after' | 'inside'
+}
+
+/** `ungroupSessions` and `deleteGroup`. Ungrouping keeps every session and
+ *  drops the group; deleting terminates the sessions inside it. */
+export interface RemoteGroupPayload {
+  groupId: string
+}
+
+/** `setGroupColor`. One of `TERMINAL_COLOR_VALUES`' keys, or null to clear. */
+export interface RemoteSetGroupColorPayload {
+  groupId: string
+  color: string | null
+}
 
 /**
  * What a remote client sends as the `openSession` payload. A subset of

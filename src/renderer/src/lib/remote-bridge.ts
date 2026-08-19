@@ -1,4 +1,4 @@
-import { useSessionStore } from '../store/session-store'
+import { getDisplayOrder, useSessionStore } from '../store/session-store'
 import type { Session, SessionGroup } from '../store/session-store'
 import { usePinnedStore, getPinnedState } from '../store/pinned-store'
 import { useSessionDirStore, refreshRecentSessionDirs } from '../store/session-dir-store'
@@ -88,6 +88,14 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
     sessionIds: g.sessionIds ?? []
   }))
 
+  // The sidebar's top-level order, filtered to what this client can resolve.
+  // `displayOrder` also carries file-tab ids and the ids of sessions the filter
+  // above dropped, and an id a client cannot resolve is an id it would have to
+  // guess about while reordering. The store computes a default order when the
+  // array has never been written, so a fresh window still has one.
+  const visibleIds = new Set<string>([...sessions.map((s) => s.id), ...groups.map((g) => g.id)])
+  const displayOrder = getDisplayOrder(state).filter((id) => visibleIds.has(id))
+
   // Launchable templates from `.clave` files, so a remote client can start a
   // whole workspace the same way the sidebar does.
   const pinnedGroups: RemotePinnedGroup[] = usePinnedStore.getState().pinnedGroups.map((pg) => ({
@@ -101,6 +109,7 @@ export function buildRemoteSnapshot(): RemoteSnapshot {
     sessions,
     groups,
     pinnedGroups,
+    displayOrder,
     focusedSessionId: state.focusedSessionId,
     // Where a remote client can start a new session. Empty until the MRU
     // preference loads; `initRemoteBridge` kicks that load off and the store
@@ -153,6 +162,7 @@ export function initRemoteBridge(): () => void {
     if (
       state.sessions === prevState.sessions &&
       state.groups === prevState.groups &&
+      state.displayOrder === prevState.displayOrder &&
       state.focusedSessionId === prevState.focusedSessionId
     ) {
       return

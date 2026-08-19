@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions use [Se
 
 ## [Unreleased]
 
+### Added
+- **Remote clients can organize the sidebar** — the iPad app can now reorder tabs and groups, move a session into or out of a group, create a group from a session, ungroup, recolour, rename, and undo the last change, all over the existing control plane. Six commands (`moveItems`, `ungroupSessions`, `deleteGroup`, `setGroupColor`, `undoSidebar`, and `sessionIds` on `createGroup`) map straight onto the store actions the sidebar's own drag and drop already calls, and the snapshot carries the sidebar's `displayOrder` so a client renders the order it is reordering. Advertised as the `organize` capability, so older clients hide it rather than fail on it.
+- **Deleting a group from a remote client** ends its sessions and its quick-launch terminals, which the sidebar's own Delete has always done for the tabs and now does for the terminals too (their PTYs used to be dropped from the store while still running).
+
 ## [1.64.0] — 2026-08-09
 
 ### Added

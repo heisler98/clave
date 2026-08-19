@@ -120,7 +120,7 @@ speak to and says which side needs updating.
 → hello    { clientId, deviceName, appVersion, protocol }
 ← welcome  { hostName, claveVersion, protocol, capabilities[], pairing: "approved"|"pending" }
 → subscribe
-← state    { sessions[], groups[], pinnedGroups[] }        full snapshot
+← state    { sessions[], groups[], pinnedGroups[], displayOrder[] }   full snapshot
 ← patch    { sessions?: {...}, groups?: {...} }            deltas thereafter
 ← event    { kind: "activity"|"prompt-waiting"|"exit"|"notification", sessionId, ... }
 → command  { id, command: "openSession"|"closeSession"|"rename"|..., payload }
@@ -129,10 +129,20 @@ speak to and says which side needs updating.
 ← attachInfo { tmuxName, socket, tmuxPath, configPath, cols, rows, remotable, reason? }
 ```
 
-`command` maps straight onto `execute()` in `mcp-dispatcher.ts:440-478`. Every verb the MCP tools
+`command` maps straight onto `execute()` in `mcp-dispatcher.ts`. Every verb the MCP tools
 expose is already implemented, tested, and shipping; the remote service reuses the dispatcher
 rather than growing a parallel one. That is the single biggest reason the host-service route is
 cheap: **the control surface is already written.**
+
+Organizing the sidebar from a remote client is the same trick a second time. `moveItems`,
+`ungroupSessions`, `deleteGroup`, `setGroupColor` and `undoSidebar` are the store actions the
+sidebar's own drag and drop and context menus call, exposed through the dispatcher rather than
+reimplemented, and `createGroup` grew the `sessionIds` its Cmd+G already passes. The host
+advertises the lot as the `organize` capability, so a client older or newer than its Mac hides the
+feature rather than failing on it. The one new piece of state is `displayOrder`: the sidebar's
+top-level order, which a client has to hold to render the order it is reordering, and which no
+other field implies (dragging a top-level tab past another changes nothing else in the model, so a
+reorder is broadcast as a whole `state`).
 
 Session objects carry what the sidebar shows plus what the iPad needs:
 

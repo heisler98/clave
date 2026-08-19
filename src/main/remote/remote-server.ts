@@ -64,7 +64,10 @@ const MAX_PAYLOAD_BYTES = 1024 * 1024 // 1 MB
  *  `create` — the server normalizes `openSession` (default cwd, forced tmux)
  *  and the snapshot carries `recentDirs`/`homeDir` to pick a directory from.
  *  `chat` — the structured chat plane: chatSubscribe/chatEvents over this
- *  socket, chatInput/chatKey into the session's pty. */
+ *  socket, chatInput/chatKey into the session's pty.
+ *  `organize` — the sidebar's own vocabulary (moveItems, createGroup with
+ *  sessionIds, ungroupSessions, deleteGroup, setGroupColor, undoSidebar) and
+ *  the `displayOrder` a client needs to render the order it is reordering. */
 const CAPABILITIES = [
   'patch',
   'attach',
@@ -74,7 +77,8 @@ const CAPABILITIES = [
   'takeover',
   'watch',
   'create',
-  'chat'
+  'chat',
+  'organize'
 ]
 
 const ATTACH_MODES: readonly RemoteAttachMode[] = ['mirror', 'takeover', 'watch']
@@ -213,10 +217,16 @@ export function pushSnapshot(snapshot: RemoteSnapshot): void {
   const removedSessionIds = prev.sessions.map((s) => s.id).filter((id) => !nextIds.has(id))
   const groupsChanged = !sameGroups(prev.groups, next.groups)
   const focusChanged = prev.focusedSessionId !== next.focusedSessionId
-  // `patch` carries no pinnedGroups, recentDirs, or homeDir fields, so a
-  // change to any of them can only be expressed as a full state. Rare enough
-  // that dedicated fields are not worth a protocol version.
+  // `patch` carries no pinnedGroups, recentDirs, homeDir, or displayOrder
+  // fields, so a change to any of them can only be expressed as a full state.
+  // Rare enough that dedicated fields are not worth a protocol version.
+  //
+  // displayOrder matters more than the others here: dragging a top-level tab
+  // past another changes NOTHING else in the model, so without this the push
+  // would diff to "nothing changed" and the client that asked for the move
+  // would never be told it happened.
   const pinnedChanged = JSON.stringify(prev.pinnedGroups) !== JSON.stringify(next.pinnedGroups)
+  const orderChanged = JSON.stringify(prev.displayOrder) !== JSON.stringify(next.displayOrder)
   const dirsChanged =
     prev.homeDir !== next.homeDir ||
     JSON.stringify(prev.recentDirs) !== JSON.stringify(next.recentDirs)
@@ -229,6 +239,7 @@ export function pushSnapshot(snapshot: RemoteSnapshot): void {
     !groupsChanged &&
     !focusChanged &&
     !pinnedChanged &&
+    !orderChanged &&
     !dirsChanged
   ) {
     return
@@ -236,7 +247,7 @@ export function pushSnapshot(snapshot: RemoteSnapshot): void {
 
   stateVersion += 1
   const state: RemoteServerMessage = { type: 'state', version: stateVersion, snapshot: next }
-  if (pinnedChanged || dirsChanged) {
+  if (pinnedChanged || orderChanged || dirsChanged) {
     broadcast(state)
     return
   }

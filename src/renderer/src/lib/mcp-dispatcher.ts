@@ -1,7 +1,13 @@
 import { useSessionStore, fileTabDedupKey } from '../store/session-store'
-import type { GroupTerminalConfig, Session, SessionGroup } from '../store/session-store'
+import type {
+  GroupTerminalColor,
+  GroupTerminalConfig,
+  Session,
+  SessionGroup
+} from '../store/session-store'
 import { usePinnedStore, getPinnedState, togglePinnedGroup } from '../store/pinned-store'
 import { buildRemoteSnapshot } from './remote-bridge'
+import { TERMINAL_COLOR_VALUES } from '../store/session-types'
 import type { PinnedGroupSession } from '../store/session-types'
 
 /**
@@ -153,12 +159,127 @@ async function handleLaunchGroup(payload: { group: string }): Promise<unknown> {
   }
 }
 
-function handleCreateGroup(payload: { name: string }): unknown {
+function handleCreateGroup(payload: { name?: string; sessionIds?: string[] }): unknown {
   const store = useSessionStore.getState()
-  store.createGroup([], payload.name)
+  // `sessionIds` is the sidebar's Cmd+G: the tabs move into the new group in
+  // one step. Omitted, the group starts empty and is filled with `moveItems`,
+  // which is what an agent creating a group ahead of its sessions wants.
+  const requested = payload.sessionIds ?? []
+  const known = new Set(store.sessions.map((s) => s.id))
+  const missing = requested.filter((id) => !known.has(id))
+  if (missing.length > 0) throw new Error(`No session with id "${missing[0]}"`)
+  store.createGroup(requested, payload.name)
   const created = useSessionStore.getState().groups.at(-1)
   if (!created) throw new Error('Group creation failed')
-  return { groupId: created.id, name: created.name }
+  return { groupId: created.id, name: created.name, sessionIds: created.sessionIds }
+}
+
+/**
+ * The sidebar's drag and drop, as one command. Every reorder, regroup and
+ * ungroup a client can ask for is this call: the store's `moveItems` already
+ * resolves a target that is a group ("drop inside"), a target inside a group
+ * ("sit next to it, in that group"), and a target it cannot find at all
+ * ("append at the top level"), which is what `REMOTE_ROOT_TARGET` relies on.
+ */
+function handleMoveItems(payload: {
+  itemIds: string[]
+  targetId: string
+  position: 'before' | 'after' | 'inside'
+}): unknown {
+  const state = useSessionStore.getState()
+  const itemIds = Array.isArray(payload.itemIds) ? payload.itemIds : []
+  if (itemIds.length === 0) throw new Error('moveItems needs at least one item to move')
+  const known = new Set([...state.sessions.map((s) => s.id), ...state.groups.map((g) => g.id)])
+  const missing = itemIds.filter((id) => !known.has(id))
+  if (missing.length > 0) throw new Error(`No session or group with id "${missing[0]}"`)
+  // The sidebar does not nest groups, and `moveItems` would happily splice a
+  // group id into another group's `sessionIds` if asked, leaving a shape no
+  // drag can produce and no renderer can draw. A group only ever moves next to
+  // a top-level item.
+  const movedGroups = state.groups.filter((g) => itemIds.includes(g.id))
+  if (movedGroups.length > 0) {
+    const self = movedGroups.find(
+      (g) => g.id === payload.targetId || g.sessionIds.includes(payload.targetId)
+    )
+    if (self) throw new Error(`"${self.name}" cannot be moved inside itself`)
+    const targetGroup =
+      state.groups.find((g) => g.sessionIds.includes(payload.targetId)) ??
+      (payload.position === 'inside'
+        ? state.groups.find((g) => g.id === payload.targetId)
+        : undefined)
+    if (targetGroup) {
+      throw new Error(`A group cannot be moved inside "${targetGroup.name}"`)
+    }
+  }
+  const position =
+    payload.position === 'inside' || payload.position === 'before' ? payload.position : 'after'
+  state.moveItems(itemIds, payload.targetId, position)
+  const groups = useSessionStore.getState().groups
+  return {
+    moved: itemIds,
+    groupIds: itemIds.map((id) => groupOfSession(groups, id)?.id ?? null)
+  }
+}
+
+/** Dissolve a group and keep every session it held. */
+function handleUngroupSessions(payload: { groupId: string }): unknown {
+  const state = useSessionStore.getState()
+  const group = state.groups.find((g) => g.id === payload.groupId)
+  if (!group) throw new Error(`No group with id "${payload.groupId}"`)
+  state.ungroupSessions(group.id)
+  return { ungrouped: group.id, sessionIds: group.sessionIds }
+}
+
+/**
+ * Delete a group AND the sessions in it, the sidebar's own Delete. The ptys go
+ * first, exactly like `handleDeleteGroup` in `Sidebar.tsx`; the group's quick-
+ * launch terminals are killed too, because `deleteGroup` drops their sessions
+ * from the store and a pty nothing holds a reference to can never be reaped.
+ */
+async function handleDeleteGroup(payload: { groupId: string }): Promise<unknown> {
+  const state = useSessionStore.getState()
+  const group = state.groups.find((g) => g.id === payload.groupId)
+  if (!group) throw new Error(`No group with id "${payload.groupId}"`)
+  const terminalSessionIds = group.terminals
+    .map((t) => t.sessionId)
+    .filter((id): id is string => id !== null)
+  const sessionIds = [...group.sessionIds, ...terminalSessionIds]
+  await Promise.all(
+    sessionIds.map(async (id) => {
+      try {
+        await window.electronAPI.killSession(id)
+      } catch {
+        // Already dead; the store entry still has to go.
+      }
+    })
+  )
+  useSessionStore.getState().deleteGroup(group.id)
+  return { deleted: group.id, sessionIds }
+}
+
+function handleSetGroupColor(payload: { groupId: string; color: string | null }): unknown {
+  const state = useSessionStore.getState()
+  const group = state.groups.find((g) => g.id === payload.groupId)
+  if (!group) throw new Error(`No group with id "${payload.groupId}"`)
+  const color = payload.color
+  // The colour vocabulary is `TERMINAL_COLOR_VALUES`' keys plus a custom hex,
+  // the same set the sidebar's picker writes. An unknown name would render
+  // colourless and silently, so it is refused here instead.
+  if (color !== null && !(color in TERMINAL_COLOR_VALUES) && !/^#[0-9a-fA-F]{3,8}$/.test(color)) {
+    throw new Error(`"${color}" is not a group colour`)
+  }
+  state.setGroupColor(group.id, (color as GroupTerminalColor | null) ?? null)
+  return { groupId: group.id, color }
+}
+
+/** The sidebar's Cmd+Z: takes back the last group, move or rename. */
+function handleUndoSidebar(): unknown {
+  const state = useSessionStore.getState()
+  if (state.sidebarUndoStack.length === 0) {
+    throw new Error('There is nothing to undo in the sidebar')
+  }
+  state.undoSidebar()
+  return { undone: true, remaining: useSessionStore.getState().sidebarUndoStack.length }
 }
 
 export async function openSessionProgrammatically(payload: {
@@ -467,6 +588,19 @@ async function execute(command: string, payload: unknown): Promise<unknown> {
       )
     case 'moveSession':
       return handleMoveSession(payload as Parameters<typeof handleMoveSession>[0])
+    // The sidebar's own reorganizing vocabulary, reachable from a remote
+    // client. Same store actions the sidebar's drag and drop and its context
+    // menus call, so the two cannot drift.
+    case 'moveItems':
+      return handleMoveItems(payload as Parameters<typeof handleMoveItems>[0])
+    case 'ungroupSessions':
+      return handleUngroupSessions(payload as Parameters<typeof handleUngroupSessions>[0])
+    case 'deleteGroup':
+      return handleDeleteGroup(payload as Parameters<typeof handleDeleteGroup>[0])
+    case 'setGroupColor':
+      return handleSetGroupColor(payload as Parameters<typeof handleSetGroupColor>[0])
+    case 'undoSidebar':
+      return handleUndoSidebar()
     case 'launchGroup':
       return handleLaunchGroup(payload as Parameters<typeof handleLaunchGroup>[0])
     case 'addGroupTerminal':
