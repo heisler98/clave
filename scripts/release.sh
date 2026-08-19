@@ -68,6 +68,11 @@ fi
 
 # ── Pre-flight checks ─────────────────────────────────────────────
 command -v gh   >/dev/null 2>&1 || error "gh CLI not found. Install: brew install gh"
+if [[ -z "${CI:-}" ]]; then
+  # Checked here rather than at `gh release create`, which is the last step
+  # of the script and ten minutes of signing away from this one.
+  gh auth status >/dev/null 2>&1 || error "gh is not authenticated. Run: gh auth login"
+fi
 command -v node >/dev/null 2>&1 || error "node not found"
 command -v npm  >/dev/null 2>&1 || error "npm not found"
 
