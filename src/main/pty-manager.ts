@@ -10,6 +10,10 @@ import { eventFilePath } from './agent-event-manager'
 import { getMcpRuntime, writeSessionMcpConfig, deleteSessionMcpConfig } from './mcp/mcp-runtime'
 import { PtyReplayBuffer } from './pty-replay'
 
+/** Codex CLI's flag for skipping approvals and the sandbox together; the
+ *  Codex counterpart of Claude's --dangerously-skip-permissions. */
+const CODEX_BYPASS_FLAG = '--dangerously-bypass-approvals-and-sandbox'
+
 const isWindows = process.platform === 'win32'
 
 /** Wrap a string as a single shell-quoted token (safe for embedding in `zsh -c`). */
@@ -645,7 +649,7 @@ class PtyManager {
       if (useAntigravityMode) {
         shellArgs = ['/c', 'agy']
       } else if (useCodexMode) {
-        shellArgs = ['/c', 'codex']
+        shellArgs = ['/c', 'codex', ...(options?.dangerousMode ? [CODEX_BYPASS_FLAG] : [])]
       } else if (useAgentsMode) {
         // `claude agents` is an interactive subcommand and does not accept
         // --session-id / --resume / --dangerously-skip-permissions, so spawn it bare.
@@ -680,11 +684,13 @@ class PtyManager {
             : 'agy'
         ]
       } else if (useCodexMode) {
-        shellArgs = [
-          '-l',
-          '-c',
-          options?.initialPrompt ? `codex ${shellSingleQuote(options.initialPrompt)}` : 'codex'
-        ]
+        // Codex's equivalent of --dangerously-skip-permissions: no approval
+        // prompts and no sandbox, so a session nobody is at the Mac to answer
+        // keeps moving. Same toggle as Claude, same meaning.
+        const parts = ['codex']
+        if (options?.dangerousMode) parts.push(CODEX_BYPASS_FLAG)
+        if (options?.initialPrompt) parts.push(shellSingleQuote(options.initialPrompt))
+        shellArgs = ['-l', '-c', parts.join(' ')]
       } else if (useAgentsMode) {
         // `claude agents` is an interactive subcommand and does not accept
         // --session-id / --resume / --dangerously-skip-permissions, so spawn it bare.

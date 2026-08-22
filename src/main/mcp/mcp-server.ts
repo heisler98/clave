@@ -110,7 +110,7 @@ function buildServer(callerSessionId: string | undefined): McpServer {
         dangerous: z
           .boolean()
           .optional()
-          .describe('Start claude with --dangerously-skip-permissions (claude mode only)'),
+          .describe('Skip permission prompts: claude gets --dangerously-skip-permissions, codex gets --dangerously-bypass-approvals-and-sandbox (other modes ignore it)'),
         command: z
           .string()
           .optional()

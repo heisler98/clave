@@ -307,8 +307,9 @@ export async function openSessionProgrammatically(payload: {
   // 'gemini' is accepted as a deprecated alias for the retired Gemini CLI.
   const antigravityMode = mode === 'antigravity' || mode === 'gemini'
   const codexMode = mode === 'codex'
-  // --dangerously-skip-permissions is a claude flag; other providers ignore it.
-  const dangerousMode = claudeMode && payload.dangerous === true
+  // Claude honours it as --dangerously-skip-permissions and Codex as
+  // --dangerously-bypass-approvals-and-sandbox; the other providers ignore it.
+  const dangerousMode = (claudeMode || codexMode) && payload.dangerous === true
   const info = await window.electronAPI.spawnSession(payload.cwd, {
     claudeMode,
     antigravityMode,

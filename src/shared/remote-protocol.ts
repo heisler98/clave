@@ -376,9 +376,10 @@ export interface RemoteOpenSessionPayload {
   mode?: 'claude' | 'codex' | 'antigravity' | 'terminal'
   /** A preset tab label. Omitted, the host titles the session itself. */
   name?: string
-  /** Claude only: spawn with --dangerously-skip-permissions, so the session
-   *  never blocks on a permission prompt nobody at the Mac will answer. Other
-   *  modes ignore it. */
+  /** Skip permission prompts, so the session never blocks on a prompt nobody
+   *  at the Mac will answer. Claude spawns with --dangerously-skip-permissions,
+   *  Codex with --dangerously-bypass-approvals-and-sandbox. Other modes
+   *  ignore it. */
   dangerous?: boolean
 }
 
